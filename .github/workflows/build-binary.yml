@@ -1,0 +1,47 @@
+name: Build Final Axon Binary
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch: # این گزینه به شما اجازه می‌دهد با دکمه Run workflow در گیت‌هاب، دستی هم آن را اجرا کنید.
+
+jobs:
+  build:
+    name: Compile Axon to Executable
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 دریافت کدهای مخزن (Checkout)
+      uses: actions/checkout@v4
+
+    - name: 🐍 نصب و راه‌اندازی پایتون
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: 🛠️ نصب پیش‌نیازهای سیستم‌عامل (GCC, Make, OpenMP)
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential gcc make libomp-dev
+
+    - name: 📦 نصب وابستگی‌های پایتون (llvmlite)
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install llvmlite
+
+    - name: 🚀 اجرای کامپایلر Axon
+      run: |
+        # این دستور، فایل‌ها را آنپک می‌کند، رانتایم C را می‌سازد، تست می‌کند و فایل‌های .bin را تولید می‌کند
+        python3 axon_bundle.py
+
+    - name: 📤 آپلود فایل‌های باینری نهایی (Artifacts)
+      uses: actions/upload-artifact@v4
+      with:
+        name: axon-binaries
+        # تمام فایل‌های .bin به جز فایل‌های تست را دانلود می‌کند
+        path: |
+          *.bin
+          !test_*.bin
+        retention-days: 7
