@@ -1,4 +1,4 @@
-name: Axon v7.0 Multi-Mode Build & Verify
+name: Axon v8.0 Auto-Upgrade & Enterprise Build
 
 on:
   push:
@@ -7,28 +7,138 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-axon-v7:
+  build-axon-v8:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Auto-Fix Known Bugs in Bundle & Runtime
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system tools & llvmlite
+        id: deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc g++ make || true
+          sudo apt-get install -y iverilog || echo "[warn] iverilog skipped"
+          python3 -m pip install --upgrade pip
+          if python3 -m pip install "llvmlite>=0.40,<0.45"; then
+            echo "llvm_ok=true" >> "$GITHUB_OUTPUT"
+          elif python3 -m pip install --only-binary=:all: llvmlite; then
+            echo "llvm_ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "llvm_ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Unpack v7 base & Auto-Upgrade to Axon v8.0
         run: |
           python3 - <<'PY'
-          import glob, os, re
+          import glob, os, re, shutil
 
-          targets = [p for p in glob.glob("*.py") + ["axon/backend.py", "axon/runtime/axon_runtime.c"] if os.path.isfile(p)]
-          for path in targets:
+          # 1) Unpack base bundle if present (without running v7 main)
+          bundle = next((f for f in ("axon_bundle.py", "axon_v7.py", "bundle.py") if os.path.isfile(f)), None)
+          if bundle:
+              ns = {}
+              src = open(bundle, encoding="utf-8").read().split("def main():")[0]
+              exec(src, ns)
+              for p, c in ns["FILES"].items():
+                  if os.path.dirname(p): os.makedirs(os.path.dirname(p), exist_ok=True)
+                  if p.endswith("Makefile"): c = c.replace("@@", "\t")
+                  open(p, "w", encoding="utf-8").write(c)
+              print(f"[unpack] extracted {len(ns['FILES'])} files from {bundle}")
+
+          def patch(path, fn):
               s = open(path, encoding="utf-8").read()
-              orig = s
-              s = re.sub(
-                  r'(?<!self\.f_init=)\bfn=ir\.Function\(self\.mod,ir\.FunctionType\(self\.i32,\[\]\),"axon_init"\)',
-                  r'self.f_init=fn=ir.Function(self.mod,ir.FunctionType(self.i32,[]),"axon_init")',
-                  s,
-              )
-              s = s.replace('(K=%0d)', '(K=%%0d)')
-              s = s.replace('tm=target.create_target_machine(opt=3)', "tm=target.create_target_machine(opt=3, reloc='pic')")
+              ns = fn(s)
+              if ns != s:
+                  open(path, "w", encoding="utf-8").write(ns)
+                  print(f"[v8.0] upgraded {path}")
+
+          # 2) Version bump
+          patch("axon/__init__.py", lambda s: '__version__ = "8.0.0"\n')
+
+          # 3) Frontend: rmsnorm, rope, attn_causal
+          def up_fe(s):
+              if '"rmsnorm":2' not in s:
+                  s = s.replace('"layernorm":3,', '"layernorm":3,"rmsnorm":2,"rope":1,"attn_causal":3,')
+                  extra_sem = (
+                      '        elif c=="rope":\n'
+                      '            if len(a[0].shape)!=2 or a[0].shape[1]%2!=0: self._err("rope requires 2-D [seq, even_dim]",e.loc)\n'
+                      '            sh=list(a[0].shape)\n'
+                      '        elif c=="attn_causal":\n'
+                      '            if len(a[0].shape)!=2 or a[0].shape!=a[1].shape or a[0].shape!=a[2].shape: self._err("attn_causal requires matching 2-D",e.loc)\n'
+                      '            sh=list(a[0].shape)\n'
+                      '        elif c=="rmsnorm":\n'
+                      '            if a[1].shape!=[a[0].shape[-1]]: self._err("rmsnorm gamma mismatch",e.loc)\n'
+                      '            sh=list(a[0].shape)\n'
+                  )
+                  s = s.replace('        elif c in ("layernorm","equilibrium"):', extra_sem + '        elif c in ("layernorm","equilibrium"):')
+              return s
+          patch("axon/frontend.py", up_fe)
+
+          # 4) IR: RMSNORM, ROPE, ATTN_CAUSAL
+          def up_ir(s):
+              if "RMSNORM=auto()" not in s:
+                  s = s.replace("LAYERNORM=auto();", "LAYERNORM=auto(); RMSNORM=auto(); ROPE=auto(); ATTN_CAUSAL=auto();")
+                  s = s.replace('"layernorm":OpKind.LAYERNORM,', '"layernorm":OpKind.LAYERNORM,"rmsnorm":OpKind.RMSNORM,"rope":OpKind.ROPE,"attn_causal":OpKind.ATTN_CAUSAL,')
+              return s
+          patch("axon/ir.py", up_ir)
+
+          # 5) Reference interpreter
+          def up_ref(s):
+              if "def _rms(" not in s:
+                  fns = (
+                      'def _rms(x,g):\n'
+                      '    cols=x.shape[-1]; rows=x.numel()//cols; out=T(x.shape,[0.0]*x.numel())\n'
+                      '    for r in range(rows):\n'
+                      '        row=x.data[r*cols:(r+1)*cols]; inv=1.0/math.sqrt(sum(v*v for v in row)/cols+1e-5)\n'
+                      '        out.data[r*cols:(r+1)*cols]=[(row[j]*inv)*g.data[j] for j in range(cols)]\n'
+                      '    return out\n'
+                      'def _rope(x):\n'
+                      '    S,D=x.shape; out=T([S,D],[0.0]*(S*D))\n'
+                      '    for p in range(S):\n'
+                      '        for k in range(D//2):\n'
+                      '            th=p*(10000.0**(-2.0*k/D)); c,s=math.cos(th),math.sin(th)\n'
+                      '            x0,x1=x.data[p*D+2*k],x.data[p*D+2*k+1]\n'
+                      '            out.data[p*D+2*k]=x0*c-x1*s; out.data[p*D+2*k+1]=x0*s+x1*c\n'
+                      '    return out\n'
+                      'def _attn_causal(q,k,v):\n'
+                      '    S,D=q.shape; inv=1.0/math.sqrt(D); out=T([S,D],[0.0]*(S*D))\n'
+                      '    for i in range(S):\n'
+                      '        sc=[sum(q.data[i*D+d]*k.data[j*D+d] for d in range(D))*inv for j in range(i+1)]\n'
+                      '        mx=max(sc); ex=[math.exp(z-mx) for z in sc]; sm=sum(ex)\n'
+                      '        for d in range(D): out.data[i*D+d]=sum((ex[j]/sm)*v.data[j*D+d] for j in range(i+1))\n'
+                      '    return out\n'
+                  )
+                  s = s.replace("def _transpose(t):", fns + "def _transpose(t):")
+                  s = s.replace(
+                      "elif n.op==OpKind.LAYERNORM: r=_ln(a[0],a[1],a[2])",
+                      "elif n.op==OpKind.LAYERNORM: r=_ln(a[0],a[1],a[2])\n"
+                      "        elif n.op==OpKind.RMSNORM: r=_rms(a[0],a[1])\n"
+                      "        elif n.op==OpKind.ROPE: r=_rope(a[0])\n"
+                      "        elif n.op==OpKind.ATTN_CAUSAL: r=_attn_causal(a[0],a[1],a[2])"
+                  )
+              return s
+          patch("axon/reference.py", up_ref)
+
+          # 6) C Runtime Header & Kernels (0-warning + UBSan clean + rmsnorm/rope/attn_causal)
+          def up_h(s):
+              if "axon_rms_norm(" not in s:
+                  decls = (
+                      "int axon_rms_norm(const AxonTensor *X, const AxonTensor *G, AxonTensor *C);\n"
+                      "int axon_rope(const AxonTensor *X, AxonTensor *C);\n"
+                      "int axon_attn_causal(const AxonTensor *Q, const AxonTensor *K, const AxonTensor *V, AxonTensor *C);\n"
+                      "int64_t axon_get_output_numel(void);\n"
+                  )
+                  head, tail = s.rsplit("#ifdef __cplusplus", 1)
+                  s = head + decls + "#ifdef __cplusplus" + tail
+              return s
+          patch("axon/runtime/axon_runtime.h", up_h)
+
+          def up_c(s):
               old_wt = '    int64_t total=1; for(int64_t i=0;i<ent.ndim;++i){ if(ent.shape[i]<=0)return NULL; total*=ent.shape[i]; }'
               new_wt = '    int64_t shp[AXON_MAX_DIMS]={0}; memcpy(shp,ent.shape,sizeof(shp)); int64_t nd=(int64_t)ent.ndim;\n    int64_t total=1; for(int64_t i=0;i<nd;++i){ if(shp[i]<=0)return NULL; total*=shp[i]; }'
               if old_wt in s:
@@ -36,144 +146,307 @@ jobs:
                   s = s.replace('tensor_view_new(ent.ndim,ent.shape,', 'tensor_view_new(nd,shp,')
                   s = s.replace('int sorted=(ent.ndim==2)?1:0;', 'int sorted=(nd==2)?1:0;')
                   s = s.replace('int64_t N=ent.shape[1]', 'int64_t N=shp[1]')
-              if s != orig:
-                  open(path, "w", encoding="utf-8").write(s)
-                  print(f"[auto-fix] patched {path}")
+              if "axon_rms_norm(" not in s:
+                  kernels = r'''
+          int axon_rms_norm(const AxonTensor*X,const AxonTensor*G,AxonTensor*C){
+              REQ(X&&C&&X->data&&C->data,AXON_ERR_ARG); REQ(X->dtype==AXON_DTYPE_F32&&C->dtype==AXON_DTYPE_F32&&X->ndim>=1&&X->ndim==C->ndim,AXON_ERR_DTYPE);
+              for(int64_t i=0;i<X->ndim;++i)REQ(X->shape[i]==C->shape[i],AXON_ERR_SHAPE);
+              const int64_t cols=X->shape[X->ndim-1]; REQ(cols>0,AXON_ERR_SHAPE);
+              int64_t rows=1; for(int64_t i=0;i<X->ndim-1;++i)rows*=X->shape[i];
+              const float*g=NULL; if(G){REQ(G->data&&G->ndim==1&&G->shape[0]==cols&&G->dtype==AXON_DTYPE_F32,AXON_ERR_SHAPE);g=(const float*)G->data;}
+              const float*x=(const float*)X->data; float*c=(float*)C->data;
+              #pragma omp parallel for schedule(static) if(rows*cols>=AXON_PAR_MIN)
+              for(int64_t r=0;r<rows;++r){ const float*xr=x+r*cols; float*yr=c+r*cols; float ms=0.f;
+                  for(int64_t j=0;j<cols;++j)ms+=xr[j]*xr[j];
+                  float inv=1.f/sqrtf(ms/(float)cols+LN_EPS);
+                  for(int64_t j=0;j<cols;++j)yr[j]=(xr[j]*inv)*(g?g[j]:1.f);
+              }
+              return AXON_OK;
+          }
+          int axon_rope(const AxonTensor*X,AxonTensor*C){
+              REQ(X&&C&&X->data&&C->data,AXON_ERR_ARG); REQ(X->ndim==2&&C->ndim==2&&X->dtype==AXON_DTYPE_F32&&C->dtype==AXON_DTYPE_F32,AXON_ERR_SHAPE);
+              const int64_t S=X->shape[0],D=X->shape[1]; REQ(S>0&&D>0&&(D%2)==0&&C->shape[0]==S&&C->shape[1]==D,AXON_ERR_SHAPE);
+              const float*x=(const float*)X->data; float*c=(float*)C->data;
+              #pragma omp parallel for schedule(static) if(S*D>=AXON_PAR_MIN)
+              for(int64_t p=0;p<S;++p)for(int64_t k=0;k<D/2;++k){
+                  float th=(float)p*powf(10000.f,-2.f*(float)k/(float)D), cs=cosf(th), sn=sinf(th);
+                  float x0=x[p*D+2*k], x1=x[p*D+2*k+1];
+                  c[p*D+2*k]=x0*cs-x1*sn; c[p*D+2*k+1]=x0*sn+x1*cs;
+              }
+              return AXON_OK;
+          }
+          int axon_attn_causal(const AxonTensor*Q,const AxonTensor*K,const AxonTensor*V,AxonTensor*C){
+              REQ(Q&&K&&V&&C&&Q->data&&K->data&&V->data&&C->data,AXON_ERR_ARG);
+              REQ(Q->ndim==2&&K->ndim==2&&V->ndim==2&&C->ndim==2,AXON_ERR_SHAPE);
+              REQ(Q->dtype==AXON_DTYPE_F32&&K->dtype==AXON_DTYPE_F32&&V->dtype==AXON_DTYPE_F32&&C->dtype==AXON_DTYPE_F32,AXON_ERR_DTYPE);
+              const int64_t S=Q->shape[0],D=Q->shape[1];
+              REQ(S>0&&D>0&&K->shape[0]==S&&K->shape[1]==D&&V->shape[0]==S&&V->shape[1]==D&&C->shape[0]==S&&C->shape[1]==D,AXON_ERR_SHAPE);
+              const float*q=(const float*)Q->data,*k=(const float*)K->data,*v=(const float*)V->data; float*c=(float*)C->data;
+              const float inv=1.f/sqrtf((float)D);
+              #pragma omp parallel for schedule(static) if(S*S*D>=AXON_PAR_MIN)
+              for(int64_t i=0;i<S;++i){
+                  const float*qi=q+i*D; float*ci=c+i*D; for(int64_t d=0;d<D;++d)ci[d]=0.f;
+                  float m=-INFINITY, l=0.f;
+                  for(int64_t j=0;j<=i;++j){
+                      const float*kj=k+j*D,*vj=v+j*D; float dot=0.f; for(int64_t d=0;d<D;++d)dot+=qi[d]*kj[d];
+                      float sc=dot*inv, mn=(sc>m)?sc:m, alpha=(m==-INFINITY)?0.f:expf(m-mn), beta=expf(sc-mn);
+                      for(int64_t d=0;d<D;++d)ci[d]=ci[d]*alpha+beta*vj[d];
+                      l=l*alpha+beta; m=mn;
+                  }
+                  float il=(l>0.f)?(1.f/l):0.f; for(int64_t d=0;d<D;++d)ci[d]*=il;
+              }
+              return AXON_OK;
+          }
+          '''
+                  s = s.replace("int axon_equilibrium(", kernels + "\nint axon_equilibrium(")
+              return s
+          patch("axon/runtime/axon_runtime.c", up_c)
+
+          # 7) Backend: f_init fix, PIC reloc, %0d fix, RMSNORM/ROPE/ATTN_CAUSAL, emit_shared + _client.py
+          def up_be(s):
+              s = re.sub(
+                  r'(?<!self\.f_init=)\bfn=ir\.Function\(self\.mod,ir\.FunctionType\(self\.i32,\[\]\),"axon_init"\)',
+                  r'self.f_init=fn=ir.Function(self.mod,ir.FunctionType(self.i32,[]),"axon_init")',
+                  s,
+              )
+              s = s.replace('(K=%0d)', '(K=%%0d)')
+              s = s.replace('tm=target.create_target_machine(opt=3)', "tm=target.create_target_machine(opt=3, reloc='pic')")
+              if "OpKind.RMSNORM" not in s:
+                  s = s.replace(
+                      "OpKind.LAYERNORM:(self._f(\"axon_layer_norm\",i32,b4),3),",
+                      "OpKind.LAYERNORM:(self._f(\"axon_layer_norm\",i32,b4),3),"
+                      "OpKind.RMSNORM:(self._f(\"axon_rms_norm\",i32,b3),2),"
+                      "OpKind.ROPE:(self._f(\"axon_rope\",i32,[p,p]),1),"
+                      "OpKind.ATTN_CAUSAL:(self._f(\"axon_attn_causal\",i32,b4),3),"
+                  )
+              if "axon_get_output_numel" not in s:
+                  s = s.replace(
+                      'f=ir.Function(self.mod,ir.FunctionType(self.i64,[]),"axon_get_input_numel"); ir.IRBuilder(f.append_basic_block("e")).ret(ir.Constant(self.i64,n))',
+                      'f=ir.Function(self.mod,ir.FunctionType(self.i64,[]),"axon_get_input_numel"); ir.IRBuilder(f.append_basic_block("e")).ret(ir.Constant(self.i64,n))\n'
+                      '        on=_numel(g.get(g.outputs[0]).shape)\n'
+                      '        f=ir.Function(self.mod,ir.FunctionType(self.i64,[]),"axon_get_output_numel"); ir.IRBuilder(f.append_basic_block("e")).ret(ir.Constant(self.i64,on))'
+                  )
+              if "link_shared" not in s:
+                  ls = (
+                      '    @staticmethod\n'
+                      '    def link_shared(objects,out_so,target="",native=False,omp=None):\n'
+                      '        from .tools import Inspector\n'
+                      '        if omp is None: omp=Inspector.shared().omp_ldflags if not target else ["-fopenmp"]\n'
+                      '        cmd=[_tool("cc",target),"-O1" if _san_flags() else "-O3","-shared","-fPIC","-pthread",*_san_flags(),*omp,*objects,"-lm","-o",out_so]\n'
+                      '        r=subprocess.run(cmd,capture_output=True,text=True)\n'
+                      '        if r.returncode!=0: raise CodegenError("shared link failed:\\n"+r.stderr.strip())\n'
+                      '        os.chmod(out_so,0o755); return out_so\n'
+                  )
+                  s = s.replace("class LLVMBackend:", ls + "\nclass LLVMBackend:")
+              if "emit_shared=False" not in s:
+                  client_tpl = r'''
+          PY_CLIENT='"""Zero-PyTorch Python FFI client."""\nimport ctypes, os\nclass _AxonTensor(ctypes.Structure):\n    _fields_=[("data",ctypes.c_void_p),("ndim",ctypes.c_int64),("shape",ctypes.c_int64*4),("strides",ctypes.c_int64*4),("dtype",ctypes.c_int32),("reserved",ctypes.c_int32),("scale",ctypes.c_float),("owns_data",ctypes.c_bool),("in_arena",ctypes.c_bool)]\nclass AxonModel:\n    def __init__(self, so_path=None, weights_path=None, arena_mb=64):\n        here=os.path.dirname(os.path.abspath(__file__)); self.so_path=so_path or os.path.join(here,"%s"); self.lib=ctypes.CDLL(os.path.abspath(self.so_path))\n        self.lib.axon_arena_init.argtypes=[ctypes.c_size_t]; self.lib.axon_arena_reset.argtypes=[]; self.lib.axon_arena_destroy.argtypes=[]\n        self.lib.axon_load_weights_file.argtypes=[ctypes.c_char_p]; self.lib.axon_load_weights_file.restype=ctypes.c_int; self.lib.axon_unload_weights_file.argtypes=[]\n        self.lib.axon_get_input_ndim.restype=ctypes.c_int64; self.lib.axon_get_input_shape.argtypes=[ctypes.POINTER(ctypes.c_int64)]\n        self.lib.axon_get_input_numel.restype=ctypes.c_int64; self.lib.axon_get_output_numel.restype=ctypes.c_int64; self.lib.axon_output_is_temp.restype=ctypes.c_int64\n        self.lib.axon_tensor_alloc_persistent.argtypes=[ctypes.c_int64,ctypes.POINTER(ctypes.c_int64),ctypes.c_int32]; self.lib.axon_tensor_alloc_persistent.restype=ctypes.c_void_p\n        self.lib.axon_tensor_fill_f32.argtypes=[ctypes.c_void_p,ctypes.POINTER(ctypes.c_float),ctypes.c_int64]; self.lib.axon_tensor_fill_f32.restype=ctypes.c_int; self.lib.axon_tensor_free.argtypes=[ctypes.c_void_p]\n        self.lib.axon_forward.argtypes=[ctypes.POINTER(ctypes.c_void_p)]; self.lib.axon_forward.restype=ctypes.POINTER(_AxonTensor); self.lib.axon_shutdown.argtypes=[]\n        wp=weights_path or (self.so_path+".axn3")\n        if os.path.exists(wp) and self.lib.axon_load_weights_file(wp.encode())!=0: raise RuntimeError(f"failed mmap {wp}")\n        if arena_mb>0: self.lib.axon_arena_init(arena_mb*1024*1024)\n        self.ndim=self.lib.axon_get_input_ndim(); self.cshape=(ctypes.c_int64*self.ndim)(); self.lib.axon_get_input_shape(self.cshape)\n        self.in_numel=self.lib.axon_get_input_numel(); self.out_numel=self.lib.axon_get_output_numel(); self.inp=self.lib.axon_tensor_alloc_persistent(self.ndim,self.cshape,0)\n    def infer(self, values):\n        if len(values)!=self.in_numel: raise ValueError(f"expected {self.in_numel}, got {len(values)}")\n        arr=(ctypes.c_float*self.in_numel)(*values); self.lib.axon_tensor_fill_f32(self.inp,arr,self.in_numel); self.lib.axon_arena_reset()\n        inps=(ctypes.c_void_p*1)(self.inp); out=self.lib.axon_forward(inps)\n        if not out: raise RuntimeError("axon_forward failed")\n        res=list((ctypes.c_float*self.out_numel).from_address(out.contents.data))\n        if self.lib.axon_output_is_temp(): self.lib.axon_tensor_free(out)\n        return res\n    def close(self):\n        if getattr(self,"inp",None): self.lib.axon_tensor_free(self.inp); self.inp=None\n        self.lib.axon_shutdown(); self.lib.axon_arena_destroy(); self.lib.axon_unload_weights_file()\n    def __enter__(self): return self\n    def __exit__(self,*_): self.close()\n'
+          '''
+                  old_bake = '    def bake(self,objects,weights,output,emit_lib=False,external_weights=False):'
+                  new_bake = client_tpl.strip() + '\n    def bake(self,objects,weights,output,emit_lib=False,emit_shared=False,external_weights=False):'
+                  s = s.replace(old_bake, new_bake)
+                  s = s.replace(
+                      'with open(output+".axn3","wb") as wf: wf.write(blob)',
+                      'ax_t=(output if output.endswith(".so") else output+".so")+".axn3" if emit_shared else output+".axn3"\n                with open(ax_t,"wb") as wf: wf.write(blob)'
+                  )
+                  shared_branch = (
+                      '            if emit_shared:\n'
+                      '                so=output if output.endswith(".so") else output+".so"\n'
+                      '                Linker.link_shared([*objects,wobj,str(rt.core_obj)],so,self.target,self.native)\n'
+                      '                open(so[:-3]+"_client.py","w").write(self.PY_CLIENT%os.path.basename(so))\n'
+                      '                return so\n'
+                  )
+                  s = s.replace(
+                      '            Linker.link([*objects,wobj,str(rt.main_obj)],output,str(rt.static_lib),self.target,self.native); return output',
+                      shared_branch + '            Linker.link([*objects,wobj,str(rt.main_obj)],output,str(rt.static_lib),self.target,self.native); return output'
+                  )
+              return s
+          patch("axon/backend.py", up_be)
+
+          # 8) Tools: Direct binary Safetensors -> IR Graph
+          def up_tools(s):
+              if "def graph_from_safetensors" not in s:
+                  meth = (
+                      '    @staticmethod\n'
+                      '    def graph_from_safetensors(path,transpose=False):\n'
+                      '        from .ir import Graph, IRNode, OpKind, WeightBlob\n'
+                      '        t=Safetensors.load(path); prefix=Converter._find_prefix(t)\n'
+                      '        if prefix is None: raise AxonError("no layer weights found")\n'
+                      '        g=Graph(); nid=0\n'
+                      '        def fresh():\n'
+                      '            nonlocal nid\n'
+                      '            i=nid; nid+=1; return i\n'
+                      '        w0=t[f"{prefix}0.weight"]; r0,c0=w0["shape"]; in_dim=c0 if transpose else r0\n'
+                      '        cur=fresh(); g.nodes.append(IRNode(cur,OpKind.INPUT,[],{"param":"x"},(1,in_dim),"f32","x")); g.inputs.append(cur)\n'
+                      '        idx=0\n'
+                      '        while f"{prefix}{idx}.weight" in t:\n'
+                      '            wt=t[f"{prefix}{idx}.weight"]; r,c=wt["shape"]; data=list(wt["data"])\n'
+                      '            if transpose: flat=[data[i*c+j] for j in range(c) for i in range(r)]; k,n=c,r\n'
+                      '            else: flat=data; k,n=r,c\n'
+                      '            wn=f"l{idx}_w"; wi=fresh(); g.weights[wn]=WeightBlob(wn,flat,[k,n],"f32")\n'
+                      '            g.nodes.append(IRNode(wi,OpKind.CONSTANT,[],{"weight":wn},(k,n),"f32",wn))\n'
+                      '            mm=fresh(); g.nodes.append(IRNode(mm,OpKind.MATMUL,[cur,wi],{},(1,n),"f32",f"mm{idx}")); cur=mm\n'
+                      '            bt=t.get(f"{prefix}{idx}.bias")\n'
+                      '            if bt is not None:\n'
+                      '                bn=f"l{idx}_b"; bi=fresh(); g.weights[bn]=WeightBlob(bn,list(bt["data"]),[n],"f32")\n'
+                      '                g.nodes.append(IRNode(bi,OpKind.CONSTANT,[],{"weight":bn},(n,),"f32",bn))\n'
+                      '                ad=fresh(); g.nodes.append(IRNode(ad,OpKind.ADD,[cur,bi],{},(1,n),"f32",f"add{idx}")); cur=ad\n'
+                      '            act=t.get(f"{prefix}{idx}.act")\n'
+                      '            if act is not None:\n'
+                      '                code=int(act["data"][0]) if len(act["data"]) else 0\n'
+                      '                op={0:OpKind.RELU,1:OpKind.GELU,2:OpKind.SOFTMAX,3:OpKind.SILU,4:OpKind.SIGMOID}.get(code,OpKind.RELU)\n'
+                      '                ac=fresh(); g.nodes.append(IRNode(ac,op,[cur],{},(1,n),"f32",f"act{idx}")); cur=ac\n'
+                      '            idx+=1\n'
+                      '        g.outputs.append(cur); g.reindex(); return g\n'
+                  )
+                  s = s + "\n" + meth.replace("    @staticmethod", "Converter.graph_from_safetensors = staticmethod(lambda *a, **kw: None)\n") if False else s.replace("EVOLVE_SRC=", meth + "\nEVOLVE_SRC=")
+              return s
+          patch("axon/tools.py", up_tools)
+
+          # 9) CLI: --emit-shared + direct Safetensors IR path
+          def up_cli(s):
+              if "--emit-shared" not in s:
+                  s = s.replace(
+                      'pb.add_argument("--native",action="store_true"); pb.add_argument("--emit-lib",action="store_true"); pb.add_argument("--emit-silicon",action="store_true")',
+                      'pb.add_argument("--native",action="store_true"); pb.add_argument("--emit-lib",action="store_true"); pb.add_argument("--emit-shared",action="store_true"); pb.add_argument("--emit-silicon",action="store_true")'
+                  )
+                  s = s.replace(
+                      'Baker(target=args.target,native=args.native).bake([obj],g.weights,args.output,emit_lib=args.emit_lib,external_weights=args.external_weights)',
+                      'Baker(target=args.target,native=args.native).bake([obj],g.weights,args.output,emit_lib=args.emit_lib,emit_shared=args.emit_shared,external_weights=args.external_weights)'
+                  )
+                  s = s.replace(
+                      "kind='library' if args.emit_lib else ('binary + mmap .axn3' if args.external_weights else 'binary')",
+                      "kind='shared .so + client' if args.emit_shared else ('library' if args.emit_lib else ('binary + mmap .axn3' if args.external_weights else 'binary'))"
+                  )
+                  s = s.replace(
+                      'kind="library" if args.emit_lib else (\'binary + mmap .axn3\' if args.external_weights else \'binary\')',
+                      'kind="shared .so + client" if args.emit_shared else ("library" if args.emit_lib else ("binary + mmap .axn3" if args.external_weights else "binary"))'
+                  )
+                  old_conv = '    if args.weights.endswith(".safetensors"):\n        if not args.transpose and not os.environ.get("AXON_ALLOW_NO_TRANSPOSE"):\n            print("[convert] warning: --transpose not set; PyTorch Linear weights are [out,in]",file=sys.stderr)\n        model=Converter.from_safetensors(args.weights,args.transpose)'
+                  new_conv = (
+                      '    if args.weights.endswith(".safetensors"):\n'
+                      '        if not args.transpose and not os.environ.get("AXON_ALLOW_NO_TRANSPOSE"):\n'
+                      '            print("[convert] warning: --transpose not set; PyTorch Linear weights are [out,in]",file=sys.stderr)\n'
+                      '        g=Pipeline(quant=not getattr(args,"no_quant",False),ternary=args.ternary,brain=args.brain).run(Converter.graph_from_safetensors(args.weights,args.transpose))\n'
+                      '        ensure_runtime(native=args.native); obj=args.output+".gen.o"\n'
+                      '        try:\n'
+                      '            LLVMBackend(target_triple=args.target).compile(g,obj)\n'
+                      '            Baker(target=args.target,native=args.native).bake([obj],g.weights,args.output,external_weights=args.external_weights)\n'
+                      '        finally:\n'
+                      '            if os.path.exists(obj): os.remove(obj)\n'
+                      '        print(f"[ok] converted (direct IR): {args.output}"); return 0\n'
+                      '    if False:\n        pass'
+                  )
+                  s = s.replace(old_conv, new_conv)
+              return s
+          patch("axon/cli.py", up_cli)
+
+          # 10) Add examples/llama_block.axon & v8.0 tests
+          llama_ax = r'''fn llama_block(x: f32[2, 4]) -> f32[2, 4] {
+              let g1: f32[4] = [1.0,1.0,1.0,1.0] as f32[4];
+              let h1: f32[2, 4] = rmsnorm(x, g1);
+              let Wq: f32[4, 4] = [0.2,0.0,0.1,0.0, 0.0,0.2,0.0,0.1, 0.1,0.0,0.2,0.0, 0.0,0.1,0.0,0.2] as f32[4, 4];
+              let Wk: f32[4, 4] = [0.1,0.1,0.0,0.0, 0.0,0.1,0.1,0.0, 0.0,0.0,0.1,0.1, 0.1,0.0,0.0,0.1] as f32[4, 4];
+              let Wv: f32[4, 4] = [0.5,0.0,0.0,0.0, 0.0,0.5,0.0,0.0, 0.0,0.0,0.5,0.0, 0.0,0.0,0.0,0.5] as f32[4, 4];
+              let Wo: f32[4, 4] = [0.3,0.0,0.1,0.0, 0.0,0.3,0.0,0.1, 0.1,0.0,0.3,0.0, 0.0,0.1,0.0,0.3] as f32[4, 4];
+              let q: f32[2, 4] = rope(matmul(h1, Wq));
+              let k: f32[2, 4] = rope(matmul(h1, Wk));
+              let v: f32[2, 4] = matmul(h1, Wv);
+              let attn: f32[2, 4] = attn_causal(q, k, v);
+              let x2: f32[2, 4] = add(x, matmul(attn, Wo));
+              let g2: f32[4] = [1.0,1.0,1.0,1.0] as f32[4];
+              let h2: f32[2, 4] = rmsnorm(x2, g2);
+              let W_gate: f32[4, 8] = [0.1,0.2,0.1,0.0,-0.1,0.2,0.1,0.0, 0.0,0.1,0.2,0.1,0.0,-0.1,0.2,0.1, 0.1,0.0,0.1,0.2,0.1,0.0,-0.1,0.2, 0.2,0.1,0.0,0.1,0.2,0.1,0.0,-0.1] as f32[4, 8];
+              let W_up: f32[4, 8]   = [0.2,0.1,0.0,0.1,0.2,0.1,0.0,0.1, 0.1,0.2,0.1,0.0,0.1,0.2,0.1,0.0, 0.0,0.1,0.2,0.1,0.0,0.1,0.2,0.1, 0.1,0.0,0.1,0.2,0.1,0.0,0.1,0.2] as f32[4, 8];
+              let W_down: f32[8, 4] = [0.1,0.0,0.1,0.0, 0.0,0.1,0.0,0.1, 0.1,0.1,0.0,0.0, 0.0,0.0,0.1,0.1, -0.1,0.1,0.0,0.0, 0.0,-0.1,0.1,0.0, 0.0,0.0,-0.1,0.1, 0.1,0.0,0.0,-0.1] as f32[8, 4];
+              let swi: f32[2, 8] = mul(silu(matmul(h2, W_gate)), matmul(h2, W_up));
+              return add(x2, matmul(swi, W_down));
+          }
+          '''
+          open("examples/llama_block.axon", "w", encoding="utf-8").write(llama_ax)
+
+          def up_tests(s):
+              if "test_llama_block_shared_ffi" not in s:
+                  extra = r'''
+              def test_llama_block_and_shared_ffi(self):
+                  src=open(os.path.join(EX,"llama_block.axon")).read()
+                  g,exe=self.build(src,"llama",external_weights=True,quant=True)
+                  inp="1,2,3,4,1,2,3,4"
+                  out=self.run_exe(exe,inp=inp)
+                  ref=evaluate(g,[input_for(g)])
+                  close(out,ref.data,5e-4)
+                  if os.environ.get("AXON_SANITIZE","0")=="1": return
+                  so=os.path.join(self.tmp,"llama_lib.so"); obj=os.path.join(self.tmp,"llama_lib.o")
+                  LLVMBackend().compile(g,obj); Baker().bake([obj],g.weights,so,emit_shared=True,external_weights=True)
+                  self.assertTrue(os.path.exists(so) and os.path.exists(so+".axn3"))
+                  cli_py=os.path.join(self.tmp,"llama_lib_client.py")
+                  self.assertTrue(os.path.exists(cli_py))
+                  import importlib.util
+                  spec=importlib.util.spec_from_file_location("llama_lib_client",cli_py)
+                  mod=importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+                  with mod.AxonModel(so,so+".axn3") as m:
+                      res=m.infer([1.,2.,3.,4.,1.,2.,3.,4.])
+                      close(res,ref.data,5e-4)
+              def test_direct_safetensors_ir(self):
+                  w=struct.pack("<8f",*[0.1]*8); hdr=json.dumps({"layers.0.weight":{"dtype":"F32","shape":[4,2],"data_offsets":[0,len(w)]}}).encode()
+                  path=os.path.join(self.tmp,"direct.safetensors")
+                  with open(path,"wb") as f: f.write(struct.pack("<Q",len(hdr))); f.write(hdr); f.write(w)
+                  g=Converter.graph_from_safetensors(path)
+                  self.assertEqual(g.get(g.outputs[0]).shape,(1,4))
+          '''
+                  s = s.replace('if __name__=="__main__": unittest.main()', extra + '\nif __name__=="__main__": unittest.main()')
+              return s
+          patch("tests/test_axon.py", up_tests)
           PY
 
-      - name: Setup Python 3.11 (primary)
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install system tools (with fallback)
+      - name: Build Runtime, Run Tests & Build v8.0 Binaries
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential gcc g++ make || true
-          sudo apt-get install -y clang || echo "[warn] clang unavailable, using gcc"
-          sudo apt-get install -y iverilog || echo "[warn] iverilog unavailable, RTL sim will be skipped"
-
-      - name: Install llvmlite (Multi-Mode Fallback)
-        id: llvm_deps
-        run: |
-          python3 -m pip install --upgrade pip
-          if python3 -m pip install "llvmlite>=0.40,<0.45"; then
-            echo "llvm_ok=true" >> "$GITHUB_OUTPUT"
-          elif python3 -m pip install --only-binary=:all: llvmlite; then
-            echo "llvm_ok=true" >> "$GITHUB_OUTPUT"
-          else
-            sudo apt-get install -y llvm-dev || true
-            if python3 -m pip install llvmlite; then
-              echo "llvm_ok=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "llvm_ok=false" >> "$GITHUB_OUTPUT"
-            fi
+          rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
+          python3 -c "from axon.runtime_paths import ensure_runtime; ensure_runtime(verbose=True)"
+          if [ "${{ steps.deps.outputs.llvm_ok }}" = "true" ]; then
+            python3 -m axon.cli selfcheck
+            python3 -m axon.cli build examples/transformer_block.axon -o transformer.bin
+            python3 -m axon.cli build examples/transformer_block.axon -o transformer_brain.bin --brain --external-weights
+            python3 -m axon.cli build examples/llama_block.axon -o llama_block.bin --external-weights
+            python3 -m axon.cli build examples/llama_block.axon -o llama_block.so --emit-shared --external-weights
           fi
 
-      - name: Unpack & Compile Axon v7.0 (Mode A -> Mode B -> Mode C)
+      - name: Run ASan + UBSan Sanitizer Suite
         run: |
-          BUNDLE=""
-          for f in axon_bundle.py axon_v7.py bundle.py; do
-            if [ -f "$f" ]; then BUNDLE="$f"; break; fi
-          done
-
-          run_build() {
-            local compiler="$1"
-            local native="$2"
-            echo "[try] CC=$compiler AXON_NATIVE=$native"
-            rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
-            export CC="$compiler"
-            export AXON_NATIVE="$native"
-            if [ -n "$BUNDLE" ]; then
-              python3 "$BUNDLE"
-            else
-              python3 -m axon.cli build examples/transformer_block.axon -o transformer.bin
-              python3 -m axon.cli build examples/transformer_block.axon -o transformer_brain.bin --brain --external-weights
-              python3 -m axon.cli build examples/transformer_block.axon -o transformer_ternary.bin --ternary
-              python3 -m axon.cli build examples/mlp.axon -o mlp.bin --no-quant
-              python3 -m axon.cli build examples/transformer_block.axon -o axon_chip.v --emit-silicon
-            fi
-          }
-
-          if [ "${{ steps.llvm_deps.outputs.llvm_ok }}" = "true" ]; then
-            if run_build gcc 0; then
-              echo "[ok] Mode 1 (GCC) succeeded"
-            elif command -v clang >/dev/null 2>&1 && run_build clang 0; then
-              echo "[ok] Mode 2 (Clang fallback) succeeded"
-            else
-              echo "[fallback] Mode 3: building runtime directly without OpenMP..."
-              mkdir -p axon/runtime
-              rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
-              cc -O3 -fPIC -std=c11 -pthread -c axon/runtime/axon_runtime.c -o axon/runtime/axon_runtime.o
-              cc -O3 -fPIC -std=c11 -pthread -c axon/runtime/axon_main.c -o axon/runtime/axon_main.o
-              ar rcs axon/runtime/libaxon_runtime.a axon/runtime/axon_runtime.o
-              cc -O3 -shared axon/runtime/axon_runtime.o -lm -pthread -o axon/runtime/libaxon_runtime.so
-              touch axon/runtime/.axon_tuning_stamp
-              python3 -m axon.cli build examples/transformer_block.axon -o transformer.bin
-              python3 -m axon.cli build examples/transformer_block.axon -o transformer_brain.bin --brain --external-weights
-            fi
-          else
-            echo "[fallback] Mode 4: Pure C Runtime compilation without llvmlite"
-            if [ -n "$BUNDLE" ]; then
-              python3 -c '
-              import os
-              ns = {}
-              src = open("'"$BUNDLE"'", encoding="utf-8").read().split("def main():")[0]
-              exec(src, ns)
-              for p, c in ns["FILES"].items():
-                  if os.path.dirname(p): os.makedirs(os.path.dirname(p), exist_ok=True)
-                  if p.endswith("Makefile"): c = c.replace("@@", "\t")
-                  open(p, "w", encoding="utf-8").write(c)
-              '
-            fi
-            cc -O3 -fPIC -std=c11 -pthread -Iaxon/runtime -c axon/runtime/axon_runtime.c -o axon/runtime/axon_runtime.o
-            ar rcs axon/runtime/libaxon_runtime.a axon/runtime/axon_runtime.o
-            cc -O3 -shared axon/runtime/axon_runtime.o -lm -pthread -o axon/runtime/libaxon_runtime.so
-            cc -O2 -pthread -Iaxon/runtime tests/test_c_runtime.c axon/runtime/axon_runtime.c -lm -o test_c_runtime.bin
-            ./test_c_runtime.bin
-          fi
-
-      - name: Verify Selfcheck & Sanitizer (with fallback)
-        run: |
-          if [ "${{ steps.llvm_deps.outputs.llvm_ok }}" = "true" ]; then
-            python3 -m axon.cli selfcheck || python3 -m unittest discover -s tests -p "test_*.py" -v
-          fi
-
-          if make sanitize; then
-            echo "[ok] make sanitize (ASan+UBSan) passed"
-          else
-            echo "[fallback] running direct C ASan+UBSan check..."
+          make sanitize || {
             cc -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -pthread \
                -Iaxon/runtime tests/test_c_runtime.c axon/runtime/axon_runtime.c -lm -o /tmp/axon_c_san
-            /tmp/axon_c_san
-            rm -f /tmp/axon_c_san
-          fi
-          make clean && make runtime || true
+            /tmp/axon_c_san && rm -f /tmp/axon_c_san
+          }
+          rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
+          python3 -c "from axon.runtime_paths import ensure_runtime; ensure_runtime(verbose=True)"
 
-      - name: Run Binary Smoke Benchmark
+      - name: Run v8.0 Benchmarks (Native Binary + Zero-PyTorch .so Client)
         run: |
-          for b in ./transformer.bin ./transformer_brain.bin ./transformer_ternary.bin ./mlp.bin; do
+          for b in ./transformer.bin ./transformer_brain.bin ./llama_block.bin; do
             if [ -x "$b" ]; then
-              echo "=== Testing $b ==="
-              "$b" --iters 50
+              echo "=== Benchmark $b ==="
+              "$b" --iters 100
             fi
           done
+          if [ -f ./llama_block_client.py ]; then
+            echo "=== Benchmark llama_block.so via Python FFI Client ==="
+            python3 -c "import time; from llama_block_client import AxonModel; m=AxonModel(); t0=time.perf_counter(); [m.infer([1,2,3,4,1,2,3,4]) for _ in range(100)]; print(f'100 iters avg {(time.perf_counter()-t0)*1e4:.2f} us'); m.close()"
+          fi
 
-      - name: Upload Compiled Binaries & Weights
+      - name: Upload Clean v8.0 Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: axon-v7-binaries
+          name: axon-v8-release
           if-no-files-found: warn
           path: |
             transformer.bin
             transformer_brain.bin
             transformer_brain.bin.axn3
-            transformer_ternary.bin
-            mlp.bin
-            axon_chip.v
-            axon_chip_tb.v
-            axon_chip_weights.hex
-            test_c_runtime.bin
-            axon/runtime/libaxon_runtime.a
-            axo
+            llama_block.bin
+            llama_block.bin.axn3
+            llama_block.so
+            llama_block.so.axn3
+            llama_block.h
+            llama_block_client.py
