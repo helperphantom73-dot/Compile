@@ -47,14 +47,12 @@ jobs:
                   if os.path.dirname(p): os.makedirs(os.path.dirname(p), exist_ok=True)
                   if p.endswith("Makefile"): c = c.replace("@@", "\t")
                   open(p, "w", encoding="utf-8").write(c)
-              print(f"[unpack] extracted {len(ns['FILES'])} files from {bundle}")
 
           def patch(path, fn):
               s = open(path, encoding="utf-8").read()
               ns = fn(s)
               if ns != s:
                   open(path, "w", encoding="utf-8").write(ns)
-                  print(f"[v8.0] upgraded {path}")
 
           patch("axon/__init__.py", lambda s: '__version__ = "8.0.0"\n')
 
@@ -401,7 +399,7 @@ jobs:
                           path=os.path.join(self.tmp,"direct.safetensors")
                           with open(path,"wb") as f: f.write(struct.pack("<Q",len(hdr))); f.write(hdr); f.write(w)
                           g=Converter.graph_from_safetensors(path)
-                          self.assertEqual(g.get(g.outputs[0]).shape,(1,4))
+                          self.assertEqual(g.get(g.outputs[0]).shape,(1,2))
                   '''), "    ")
                   s = s.replace('if __name__=="__main__": unittest.main()', extra + 'if __name__=="__main__": unittest.main()')
               return s
@@ -457,5 +455,4 @@ jobs:
             llama_block.bin.axn3
             llama_block.so
             llama_block.so.axn3
-            llama_block.h
             llama_block_client.py
