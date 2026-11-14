@@ -27,6 +27,8 @@ jobs:
                   r'self.f_init=fn=ir.Function(self.mod,ir.FunctionType(self.i32,[]),"axon_init")',
                   s,
               )
+              s = s.replace('(K=%0d)', '(K=%%0d)')
+              s = s.replace('tm=target.create_target_machine(opt=3)', "tm=target.create_target_machine(opt=3, reloc='pic')")
               old_wt = '    int64_t total=1; for(int64_t i=0;i<ent.ndim;++i){ if(ent.shape[i]<=0)return NULL; total*=ent.shape[i]; }'
               new_wt = '    int64_t shp[AXON_MAX_DIMS]={0}; memcpy(shp,ent.shape,sizeof(shp)); int64_t nd=(int64_t)ent.ndim;\n    int64_t total=1; for(int64_t i=0;i<nd;++i){ if(shp[i]<=0)return NULL; total*=shp[i]; }'
               if old_wt in s:
@@ -79,6 +81,7 @@ jobs:
             local compiler="$1"
             local native="$2"
             echo "[try] CC=$compiler AXON_NATIVE=$native"
+            rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
             export CC="$compiler"
             export AXON_NATIVE="$native"
             if [ -n "$BUNDLE" ]; then
@@ -98,13 +101,14 @@ jobs:
             elif command -v clang >/dev/null 2>&1 && run_build clang 0; then
               echo "[ok] Mode 2 (Clang fallback) succeeded"
             else
-              echo "[fallback] Mode 3: building runtime directly with cc..."
+              echo "[fallback] Mode 3: building runtime directly without OpenMP..."
               mkdir -p axon/runtime
-              cc -O3 -fPIC -std=c11 -pthread -fopenmp -c axon/runtime/axon_runtime.c -o axon/runtime/axon_runtime.o || \
+              rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
               cc -O3 -fPIC -std=c11 -pthread -c axon/runtime/axon_runtime.c -o axon/runtime/axon_runtime.o
               cc -O3 -fPIC -std=c11 -pthread -c axon/runtime/axon_main.c -o axon/runtime/axon_main.o
               ar rcs axon/runtime/libaxon_runtime.a axon/runtime/axon_runtime.o
               cc -O3 -shared axon/runtime/axon_runtime.o -lm -pthread -o axon/runtime/libaxon_runtime.so
+              touch axon/runtime/.axon_tuning_stamp
               python3 -m axon.cli build examples/transformer_block.axon -o transformer.bin
               python3 -m axon.cli build examples/transformer_block.axon -o transformer_brain.bin --brain --external-weights
             fi
@@ -148,3 +152,28 @@ jobs:
 
       - name: Run Binary Smoke Benchmark
         run: |
+          for b in ./transformer.bin ./transformer_brain.bin ./transformer_ternary.bin ./mlp.bin; do
+            if [ -x "$b" ]; then
+              echo "=== Testing $b ==="
+              "$b" --iters 50
+            fi
+          done
+
+      - name: Upload Compiled Binaries & Weights
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: axon-v7-binaries
+          if-no-files-found: warn
+          path: |
+            transformer.bin
+            transformer_brain.bin
+            transformer_brain.bin.axn3
+            transformer_ternary.bin
+            mlp.bin
+            axon_chip.v
+            axon_chip_tb.v
+            axon_chip_weights.hex
+            test_c_runtime.bin
+            axon/runtime/libaxon_runtime.a
+            axo
