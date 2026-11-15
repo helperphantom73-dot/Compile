@@ -26,8 +26,54 @@ jobs:
           python3 -m pip install "llvmlite>=0.40,<0.45"
           clinfo || true
 
-      - name: Unpack & Build Axon v10.0
+      - name: Auto-Patch axon_bundle.py & Build Axon v10.0
         run: |
+          python3 - <<'PY'
+          s = open("axon_bundle.py", encoding="utf-8").read()
+          old_fn = (
+              '    def _bcast(self, var, src_shape, dst_shape, elem="f32"):\n'
+              '        src_shape = tuple(src_shape)\n'
+              '        dst_shape = tuple(dst_shape)\n'
+              '        if src_shape == dst_shape:\n'
+              '            return var\n'
+              '        out = self._v("bc")\n'
+              '        if len(src_shape) == 0:\n'
+              '            self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
+              '            return out\n'
+              '        off = len(dst_shape) - len(src_shape)\n'
+              '        dims = ", ".join(str(off + i) for i in range(len(src_shape)))\n'
+              '        self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [{dims}] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
+              '        return out'
+          )
+          new_fn = (
+              '    def _bcast(self, var, src_shape, dst_shape, elem="f32", dims=None):\n'
+              '        src_shape = tuple(src_shape)\n'
+              '        dst_shape = tuple(dst_shape)\n'
+              '        if src_shape == dst_shape:\n'
+              '            return var\n'
+              '        out = self._v("bc")\n'
+              '        if len(src_shape) == 0:\n'
+              '            self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
+              '            return out\n'
+              '        if dims is None:\n'
+              '            off = len(dst_shape) - len(src_shape)\n'
+              '            dims = [off + i for i in range(len(src_shape))]\n'
+              '        dims_str = ", ".join(str(d) for d in dims)\n'
+              '        self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [{dims_str}] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
+              '        return out'
+          )
+          if old_fn in s:
+              s = s.replace(old_fn, new_fn)
+          for call_old, call_new in (
+              ("mxb = self._bcast(mx, rsh, shape)", "mxb = self._bcast(mx, rsh, shape, dims=list(range(len(rsh))))"),
+              ("smb = self._bcast(sm, rsh, shape)", "smb = self._bcast(sm, rsh, shape, dims=list(range(len(rsh))))"),
+              ("meanb = self._bcast(mean, rsh, shape)", "meanb = self._bcast(mean, rsh, shape, dims=list(range(len(rsh))))"),
+              ("rsb = self._bcast(rs, rsh, shape)", "rsb = self._bcast(rs, rsh, shape, dims=list(range(len(rsh))))"),
+          ):
+              s = s.replace(call_old, call_new)
+          open("axon_bundle.py", "w", encoding="utf-8").write(s)
+          print("[patch] tpu_backend _bcast updated successfully")
+          PY
           python3 axon_bundle.py
 
       - name: Full Selfcheck (Unit Tests + TPU MLIR Validator + OpenCL + Verilog RTL)
