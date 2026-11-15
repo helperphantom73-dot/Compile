@@ -1,4 +1,5 @@
-name: Axon v10.0 Universal Brain & Multi-Accelerator CI
+
+name: Axon v11.0 Universal Cross-OS & Enterprise CI
 
 on:
   push:
@@ -7,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-verify-bench:
+  linux-universal-full:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -26,77 +27,24 @@ jobs:
           python3 -m pip install "llvmlite>=0.40,<0.45"
           clinfo || true
 
-      - name: Auto-Patch axon_bundle.py & Build Axon v10.0
+      - name: Unpack v10 & Auto-Upgrade to Axon v11.0
         run: |
-          python3 - <<'PY'
-          s = open("axon_bundle.py", encoding="utf-8").read()
-          old_fn = (
-              '    def _bcast(self, var, src_shape, dst_shape, elem="f32"):\n'
-              '        src_shape = tuple(src_shape)\n'
-              '        dst_shape = tuple(dst_shape)\n'
-              '        if src_shape == dst_shape:\n'
-              '            return var\n'
-              '        out = self._v("bc")\n'
-              '        if len(src_shape) == 0:\n'
-              '            self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
-              '            return out\n'
-              '        off = len(dst_shape) - len(src_shape)\n'
-              '        dims = ", ".join(str(off + i) for i in range(len(src_shape)))\n'
-              '        self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [{dims}] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
-              '        return out'
-          )
-          new_fn = (
-              '    def _bcast(self, var, src_shape, dst_shape, elem="f32", dims=None):\n'
-              '        src_shape = tuple(src_shape)\n'
-              '        dst_shape = tuple(dst_shape)\n'
-              '        if src_shape == dst_shape:\n'
-              '            return var\n'
-              '        out = self._v("bc")\n'
-              '        if len(src_shape) == 0:\n'
-              '            self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
-              '            return out\n'
-              '        if dims is None:\n'
-              '            off = len(dst_shape) - len(src_shape)\n'
-              '            dims = [off + i for i in range(len(src_shape))]\n'
-              '        dims_str = ", ".join(str(d) for d in dims)\n'
-              '        self._emit(f"{out} = stablehlo.broadcast_in_dim {var}, dims = [{dims_str}] : ({_ty(src_shape, elem)}) -> {_ty(dst_shape, elem)}")\n'
-              '        return out'
-          )
-          if old_fn in s:
-              s = s.replace(old_fn, new_fn)
-          for call_old, call_new in (
-              ("mxb = self._bcast(mx, rsh, shape)", "mxb = self._bcast(mx, rsh, shape, dims=list(range(len(rsh))))"),
-              ("smb = self._bcast(sm, rsh, shape)", "smb = self._bcast(sm, rsh, shape, dims=list(range(len(rsh))))"),
-              ("meanb = self._bcast(mean, rsh, shape)", "meanb = self._bcast(mean, rsh, shape, dims=list(range(len(rsh))))"),
-              ("rsb = self._bcast(rs, rsh, shape)", "rsb = self._bcast(rs, rsh, shape, dims=list(range(len(rsh))))"),
-          ):
-              s = s.replace(call_old, call_new)
-          open("axon_bundle.py", "w", encoding="utf-8").write(s)
-          print("[patch] tpu_backend _bcast updated successfully")
-          PY
-          python3 axon_bundle.py
+          python3 axon_v11_upgrade.py
 
-      - name: Full Selfcheck (Unit Tests + TPU MLIR Validator + OpenCL + Verilog RTL)
+      - name: Hardware AutoConfig & Full Selfcheck (Tests + TPU MLIR + OpenCL + Verilog)
         env:
           AXON_REQUIRE_OPENCL: "1"
         run: |
+          python3 -m axon.cli autoconfig
           python3 -m axon.cli selfcheck
 
-      - name: Build Multi-Target v10.0 Binaries & Accelerators
+      - name: Enterprise One-Command Deploy (FP4 + Brain + Zero-PyTorch FFI + TPU + GPU)
         run: |
-          python3 -m axon.cli build examples/transformer_block.axon -o transformer.bin
-          python3 -m axon.cli build examples/transformer_block.axon -o transformer_brain.bin --brain --external-weights
-          python3 -m axon.cli build examples/llama_block.axon -o llama_block.bin --external-weights
+          python3 -m axon.cli deploy examples/mini_llm.axon -o dist_linux/mini_llm --gpu
+          ./dist_linux/mini_llm/mini_llm.bin --generate 8
+          ./dist_linux/mini_llm/mini_llm_gpu.bin --generate 4
+          python3 -m axon.cli build examples/transformer_block.axon -o transformer_brain.bin --brain --external-weights --target auto
           python3 -m axon.cli build examples/llama_block.axon -o llama_block.so --emit-shared --external-weights
-          python3 -m axon.cli build examples/mini_llm.axon -o mini_llm.bin --brain --external-weights
-          ./mini_llm.bin --generate 8
-          python3 -m axon.cli build examples/transformer_block.axon -o transformer_gpu.bin --target gpu
-          ./transformer_gpu.bin --iters 20
-          python3 -m axon.cli build examples/mini_llm.axon -o mini_llm_gpu.bin --target gpu
-          ./mini_llm_gpu.bin --generate 4
-          python3 -m axon.cli build examples/transformer_block.axon -o transformer_tpu.mlir --target tpu
-          python3 -m axon.cli build examples/llama_block.axon -o llama_tpu.mlir --target tpu
-          python3 -m axon.cli build examples/mini_llm.axon -o mini_llm_tpu.mlir --target tpu
           python3 -m axon.cli build examples/transformer_block.axon -o axon_chip.v --emit-silicon
 
       - name: Run ASan + UBSan Sanitizer Suite
@@ -105,47 +53,77 @@ jobs:
         run: |
           make sanitize
           rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
-          python3 -c "from axon.runtime_paths import ensure_runtime; ensure_runtime(verbose=True)"
+          python3 -m axon.cli autoconfig --no-tune
 
-      - name: Run v10.0 Multi-Backend Benchmarks & Step Summary Chart
+      - name: Run v11.0 Multi-Backend Benchmarks & Step Summary Chart
         run: |
           python3 tests/bench_chart.py --require-opencl
-          for b in ./transformer.bin ./transformer_brain.bin ./llama_block.bin ./mini_llm.bin ./transformer_gpu.bin; do
-            if [ -x "$b" ]; then
-              echo "=== Benchmark $b ==="
-              "$b" --iters 50
-            fi
-          done
-          if [ -f ./llama_block_client.py ]; then
-            echo "=== Benchmark llama_block.so via Python FFI Client ==="
-            python3 -c "import time; from llama_block_client import AxonModel; m=AxonModel(); t0=time.perf_counter(); [m.infer([1,2,3,4,1,2,3,4]) for _ in range(100)]; print(f'100 iters avg {(time.perf_counter()-t0)*1e4:.2f} us'); m.close()"
-          fi
+          ./transformer_brain.bin --iters 50
+          ./dist_linux/mini_llm/mini_llm.bin --iters 50
 
-      - name: Upload Clean v10.0 Artifacts
+      - name: Upload Axon v11.0 Linux Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: axon-v10-universal-release
+          name: axon-v11-linux-x86_64
           if-no-files-found: warn
           path: |
-            transformer.bin
+            dist_linux/
             transformer_brain.bin
             transformer_brain.bin.axn3
-            transformer_gpu.bin
-            transformer_gpu.bin.cl
-            transformer_tpu.mlir
-            llama_block.bin
-            llama_block.bin.axn3
             llama_block.so
             llama_block.so.axn3
             llama_block_client.py
-            llama_tpu.mlir
-            mini_llm.bin
-            mini_llm.bin.axn3
-            mini_llm_gpu.bin
-            mini_llm_tpu.mlir
             axon_chip.v
             axon_chip_tb.v
             axon_chip_weights.hex
             bench_results.md
             bench_results.json
+
+  cross-os-verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ macos-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ensure C Compiler & llvmlite
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            if ! command -v gcc >/dev/null 2>&1; then
+              choco install mingw -y
+              export PATH="/c/ProgramData/mingw64/mingw64/bin:/c/ProgramData/chocolatey/bin:$PATH"
+              echo "C:/ProgramData/mingw64/mingw64/bin" >> "$GITHUB_PATH"
+            fi
+          fi
+          python -m pip install --upgrade pip
+          python -m pip install "llvmlite>=0.40,<0.45"
+
+      - name: Build & Verify Axon v11.0 on ${{ matrix.os }}
+        shell: bash
+        run: |
+          python axon_v11_upgrade.py
+          python -m axon.cli autoconfig --no-tune
+          python -m axon.cli deploy examples/mini_llm.axon -o "dist_${{ runner.os }}/mini_llm"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            "./dist_${{ runner.os }}/mini_llm/mini_llm.exe" --generate 6
+          else
+            "./dist_${{ runner.os }}/mini_llm/mini_llm.bin" --generate 6
+          fi
+
+      - name: Upload ${{ matrix.os }} Enterprise Bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: axon-v11-${{ matrix.os }}
+          if-no-files-found: warn
+          path: dist_${{ runner.os }
