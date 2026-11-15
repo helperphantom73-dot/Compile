@@ -28,6 +28,7 @@ jobs:
 
       - name: Unpack v10 & Auto-Upgrade to Axon v11.0
         run: |
+          python3 -c 'p="axon_v11_upgrade.py"; s=open(p,encoding="utf-8").read().replace(".split(\"def main():\")[0]", ".rsplit(\"def main():\", 1)[0]"); open(p,"w",encoding="utf-8").write(s)'
           python3 axon_v11_upgrade.py
 
       - name: Hardware AutoConfig & Full Selfcheck (Tests + TPU MLIR + OpenCL + Verilog)
@@ -112,6 +113,7 @@ jobs:
       - name: Build & Verify Axon v11.0 on ${{ matrix.os }}
         shell: bash
         run: |
+          python -c 'p="axon_v11_upgrade.py"; s=open(p,encoding="utf-8").read().replace(".split(\"def main():\")[0]", ".rsplit(\"def main():\", 1)[0]"); open(p,"w",encoding="utf-8").write(s)'
           python axon_v11_upgrade.py
           python -m axon.cli autoconfig --no-tune
           python -m axon.cli deploy examples/mini_llm.axon -o "dist_${{ runner.os }}/mini_llm"
