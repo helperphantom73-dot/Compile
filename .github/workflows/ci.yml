@@ -38,7 +38,42 @@ jobs:
               ("}\n'''\n\nSWIFT_WRAP = r'''", '}\n"""\n\nSWIFT_WRAP = r"""'),
               ("    }\n}\n'''\n\n\ndef _find_android_cc():", '    }\n}\n"""\n\n\ndef _find_android_cc():'),
               ("SN(11,15,2,4,8,3,5,8,10);", "SN(11,15,2,4,8,3,5,8,10,NULL);"),
-              ("if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {", "if (0 && use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {"),
+              ('\'    sp.add_parser("doctor")\'', '\'    pi=sp.add_parser("inspect")\''),
+              ("uint8_t hdr[56]; if (fread(hdr, 1, 56, fg) != 56", "uint8_t hdr[60]; if (fread(hdr, 1, 60, fg) != 60"),
+              ("float *reg_data; float *sig_data; int64_t R, keep;\n} CWeight;", "float *reg_data; float *sig_data; int64_t R, keep;\n    int native_dtype;\n} CWeight;"),
+              (
+                  "if (cn->op == 1 && cn->weight[0]) {\n"
+                  "            AxonTensor *wt = axon_weight_tensor(cn->weight);\n"
+                  "            if (wt) {\n"
+                  "                int64_t tot = axon_tensor_numel(wt);\n"
+                  "                float *tmp = (float*)malloc((size_t)tot * sizeof(float));\n"
+                  "                if (tmp && axon_tensor_to_f32(wt, tmp, tot) == AXON_OK) add_weight(m, cn->weight, (int)wt->ndim, wt->shape, tmp);\n"
+                  "                free(tmp); axon_tensor_free(wt);\n"
+                  "            }\n"
+                  "        }",
+                  "if (cn->op == 1 && cn->weight[0] && !find_cweight(m, cn->weight)) {\n"
+                  "            AxonTensor *wt = axon_weight_tensor(cn->weight);\n"
+                  "            if (wt) {\n"
+                  "                int64_t tot = axon_tensor_numel(wt);\n"
+                  "                float *tmp = (float*)malloc((size_t)tot * sizeof(float));\n"
+                  "                if (tmp && axon_tensor_to_f32(wt, tmp, tot) == AXON_OK) {\n"
+                  "                    add_weight(m, cn->weight, (int)wt->ndim, wt->shape, tmp);\n"
+                  "                    m->weights[m->num_weights - 1].native_dtype = (int)wt->dtype;\n"
+                  "                }\n"
+                  "                free(tmp); axon_tensor_free(wt);\n"
+                  "            }\n"
+                  "        }",
+              ),
+              (
+                  "if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {\n"
+                  "                t->data = cw->reg_data; t->owns_data = false; w_mem += (size_t)cw->numel * 4;\n"
+                  "            } else if (use_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
+                  "int is_axg = (strcmp(m->format, \"axg1+axn3\") == 0);\n"
+                  "            int want_fp4 = is_axg ? (cw->native_dtype == AXON_DTYPE_FP4) : use_fp4;\n"
+                  "            int want_tern = is_axg ? (cw->native_dtype == AXON_DTYPE_TERNARY) : use_tern;\n"
+                  "            if (want_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
+              ),
+              ("} else if (use_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {", "} else if (want_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {"),
           ):
               s = s.replace(a, b)
           open(p, "w", encoding="utf-8").write(s)
@@ -141,7 +176,42 @@ jobs:
               ("}\n'''\n\nSWIFT_WRAP = r'''", '}\n"""\n\nSWIFT_WRAP = r"""'),
               ("    }\n}\n'''\n\n\ndef _find_android_cc():", '    }\n}\n"""\n\n\ndef _find_android_cc():'),
               ("SN(11,15,2,4,8,3,5,8,10);", "SN(11,15,2,4,8,3,5,8,10,NULL);"),
-              ("if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {", "if (0 && use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {"),
+              ('\'    sp.add_parser("doctor")\'', '\'    pi=sp.add_parser("inspect")\''),
+              ("uint8_t hdr[56]; if (fread(hdr, 1, 56, fg) != 56", "uint8_t hdr[60]; if (fread(hdr, 1, 60, fg) != 60"),
+              ("float *reg_data; float *sig_data; int64_t R, keep;\n} CWeight;", "float *reg_data; float *sig_data; int64_t R, keep;\n    int native_dtype;\n} CWeight;"),
+              (
+                  "if (cn->op == 1 && cn->weight[0]) {\n"
+                  "            AxonTensor *wt = axon_weight_tensor(cn->weight);\n"
+                  "            if (wt) {\n"
+                  "                int64_t tot = axon_tensor_numel(wt);\n"
+                  "                float *tmp = (float*)malloc((size_t)tot * sizeof(float));\n"
+                  "                if (tmp && axon_tensor_to_f32(wt, tmp, tot) == AXON_OK) add_weight(m, cn->weight, (int)wt->ndim, wt->shape, tmp);\n"
+                  "                free(tmp); axon_tensor_free(wt);\n"
+                  "            }\n"
+                  "        }",
+                  "if (cn->op == 1 && cn->weight[0] && !find_cweight(m, cn->weight)) {\n"
+                  "            AxonTensor *wt = axon_weight_tensor(cn->weight);\n"
+                  "            if (wt) {\n"
+                  "                int64_t tot = axon_tensor_numel(wt);\n"
+                  "                float *tmp = (float*)malloc((size_t)tot * sizeof(float));\n"
+                  "                if (tmp && axon_tensor_to_f32(wt, tmp, tot) == AXON_OK) {\n"
+                  "                    add_weight(m, cn->weight, (int)wt->ndim, wt->shape, tmp);\n"
+                  "                    m->weights[m->num_weights - 1].native_dtype = (int)wt->dtype;\n"
+                  "                }\n"
+                  "                free(tmp); axon_tensor_free(wt);\n"
+                  "            }\n"
+                  "        }",
+              ),
+              (
+                  "if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {\n"
+                  "                t->data = cw->reg_data; t->owns_data = false; w_mem += (size_t)cw->numel * 4;\n"
+                  "            } else if (use_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
+                  "int is_axg = (strcmp(m->format, \"axg1+axn3\") == 0);\n"
+                  "            int want_fp4 = is_axg ? (cw->native_dtype == AXON_DTYPE_FP4) : use_fp4;\n"
+                  "            int want_tern = is_axg ? (cw->native_dtype == AXON_DTYPE_TERNARY) : use_tern;\n"
+                  "            if (want_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
+              ),
+              ("} else if (use_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {", "} else if (want_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {"),
           ):
               s = s.replace(a, b)
           open(p, "w", encoding="utf-8").write(s)
