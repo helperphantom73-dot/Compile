@@ -36,6 +36,10 @@ jobs:
               s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
               s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
               s = s.replace(
+                  'if "mingw" in out: return out',
+                  'if "mingw" in out: return "x86_64-w64-windows-gnu" if "x86_64" in out else out',
+              )
+              s = s.replace(
                   "    return _aligned_malloc(size, align);",
                   "    if(align<sizeof(void*))align=sizeof(void*);\n"
                   "    if(size>SIZE_MAX-align-sizeof(void*))return NULL;\n"
@@ -228,6 +232,10 @@ jobs:
               s = open(p, encoding="utf-8").read()
               s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
               s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
+              s = s.replace(
+                  'if "mingw" in out: return out',
+                  'if "mingw" in out: return "x86_64-w64-windows-gnu" if "x86_64" in out else out',
+              )
               s = s.replace(
                   "    return _aligned_malloc(size, align);",
                   "    if(align<sizeof(void*))align=sizeof(void*);\n"
