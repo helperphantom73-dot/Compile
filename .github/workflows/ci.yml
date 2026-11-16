@@ -30,6 +30,7 @@ jobs:
           AXON_REQUIRE_OPENCL: "1"
         run: |
           python3 - <<'PY'
+          import os
           p = "axon_v12_studio.py"
           s = open(p, encoding="utf-8").read()
           for a, b in (
@@ -79,10 +80,9 @@ jobs:
           open(p, "w", encoding="utf-8").write(s)
 
           ns = {}
-          exec(open(p, encoding="utf-8").read().split("def main():")[0], ns)
+          exec(open(p, encoding="utf-8").read().rsplit("def main():", 1)[0], ns)
           ns["ensure_v11_base"]()
 
-          # Cross-OS IEEE-754 & shared-lib .axn3 fixes
           rp = "axon/runtime_paths.py"
           open(rp, "w", encoding="utf-8").write(open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]'))
           bi = "axon/backend/__init__.py"
@@ -240,7 +240,7 @@ jobs:
           open(p, "w", encoding="utf-8").write(s)
 
           ns = {}
-          exec(open(p, encoding="utf-8").read().split("def main():")[0], ns)
+          exec(open(p, encoding="utf-8").read().rsplit("def main():", 1)[0], ns)
           ns["ensure_v11_base"]()
 
           rp = "axon/runtime_paths.py"
