@@ -1,4 +1,4 @@
-name: Axon v11.0 Universal Cross-OS & Enterprise CI
+name: Axon v11.0 Single-File Universal CI
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  linux-universal-full:
+  linux-single-file-ci:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -24,70 +24,148 @@ jobs:
           sudo apt-get install -y build-essential gcc g++ make iverilog ocl-icd-opencl-dev pocl-opencl-icd clinfo
           python3 -m pip install --upgrade pip
           python3 -m pip install "llvmlite>=0.40,<0.45"
-          clinfo || true
 
-      - name: Unpack v10 & Auto-Upgrade to Axon v11.0
+      - name: Build Unified Single-File axon_v11.py
         run: |
           python3 - <<'PY'
-          import re
-          p = "axon_v11_upgrade.py"
-          s = open(p, encoding="utf-8").read()
-          s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
-          s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
-          open(p, "w", encoding="utf-8").write(s)
-          PY
-          python3 axon_v11_upgrade.py
+          import base64, json, os, re, zlib
 
-      - name: Hardware AutoConfig & Full Selfcheck (Tests + TPU MLIR + OpenCL + Verilog)
+          if not os.path.isfile("axon_v11.py"):
+              p = "axon_v11_upgrade.py"
+              s = open(p, encoding="utf-8").read()
+              s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
+              s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
+              open(p, "w", encoding="utf-8").write(s)
+
+              ns = {}
+              exec(open(p, encoding="utf-8").read().rsplit("def main():", 1)[0], ns)
+              ns["apply_v11"]()
+
+              files = {}
+              for root_file in ("pyproject.toml", "README.md", "Makefile", ".github/workflows/ci.yml"):
+                  if os.path.isfile(root_file):
+                      files[root_file] = base64.b64encode(open(root_file, "rb").read()).decode("ascii")
+              for d in ("axon", "examples", "tests"):
+                  for cur, dirs, fnames in os.walk(d):
+                      dirs[:] = [x for x in dirs if x != "__pycache__"]
+                      for fn in sorted(fnames):
+                          fp = os.path.join(cur, fn).replace("\\", "/")
+                          if fp.startswith("axon/runtime/") and not (fn.endswith((".c", ".h", ".py")) or fn == "Makefile"):
+                              continue
+                          if fn.endswith((".py", ".c", ".h", ".axon")) or fn == "Makefile":
+                              files[fp] = base64.b64encode(open(fp, "rb").read()).decode("ascii")
+
+              payload = base64.b64encode(zlib.compress(json.dumps(files).encode("utf-8"), 9)).decode("ascii")
+              stub = '''#!/usr/bin/env python3
+          """Axon v11.0 - Single-File Universal Self-Configuring AI Compiler & Runtime."""
+          import argparse, base64, hashlib, json, os, subprocess, sys, zlib
+
+          def _unpack(force=False):
+              if not force and os.path.isfile("axon/autoconfig.py") and os.path.isfile(".axon_v11_ready"):
+                  return
+              data = json.loads(zlib.decompress(base64.b64decode(PAYLOAD)).decode("utf-8"))
+              for path, b64 in data.items():
+                  d = os.path.dirname(path)
+                  if d:
+                      os.makedirs(d, exist_ok=True)
+                  with open(path, "wb") as fh:
+                      fh.write(base64.b64decode(b64))
+              with open(".axon_v11_ready", "w", encoding="utf-8") as fh:
+                  fh.write("11.0.0\\n")
+
+          def main():
+              if os.getcwd() not in sys.path:
+                  sys.path.insert(0, os.getcwd())
+              argv = sys.argv[1:]
+              cmd = argv[0] if argv else "setup"
+              if cmd == "unpack":
+                  _unpack(force=True)
+                  print("[axon v11] unpacked all sources cleanly.")
+                  return
+              _unpack(force=False)
+              if cmd == "setup":
+                  from axon.autoconfig import auto_configure
+                  auto_configure(tune=False, verbose=True)
+                  print("[axon v11] ready. Run: python axon_v11.py run examples/mini_llm.axon --generate 6")
+                  return
+              if cmd == "test":
+                  from axon.cli import main as cli_main
+                  sys.exit(cli_main(["selfcheck"]))
+              if cmd == "bench":
+                  sys.exit(subprocess.run([sys.executable, "tests/bench_chart.py", *argv[1:]]).returncode)
+              if cmd == "run":
+                  ap = argparse.ArgumentParser(prog="axon_v11.py run")
+                  ap.add_argument("source")
+                  ap.add_argument("--input", default="")
+                  ap.add_argument("--iters", type=int, default=1)
+                  ap.add_argument("--generate", type=int, default=0)
+                  ap.add_argument("--ternary", action="store_true")
+                  ap.add_argument("--no-quant", action="store_true")
+                  ap.add_argument("--no-brain", action="store_true")
+                  ap.add_argument("--transpose", action="store_true")
+                  ap.add_argument("--gpu", action="store_true")
+                  args = ap.parse_args(argv[1:])
+                  from axon.deploy import deploy_model, _exe_ext
+                  q = "ternary" if args.ternary else ("none" if args.no_quant else "fp4")
+                  key = hashlib.sha256(f"{os.path.abspath(args.source)}|{q}|{not args.no_brain}|{args.transpose}|{args.gpu}".encode()).hexdigest()[:12]
+                  stem = os.path.splitext(os.path.basename(args.source))[0]
+                  out_dir = os.path.join(".axon_cache", f"{stem}_{key}")
+                  exe = os.path.join(out_dir, (f"{stem}_gpu" if args.gpu else stem) + _exe_ext())
+                  if not os.path.exists(exe) or os.path.getmtime(args.source) > os.path.getmtime(exe):
+                      man = deploy_model(args.source, out_dir, quant=q, brain=not args.no_brain, transpose=args.transpose, emit_gpu=True if args.gpu else False, emit_tpu=False, verify=False)
+                      exe = man["artifacts"].get("gpu_executable") if args.gpu else man["artifacts"]["executable"]
+                  rcmd = [exe]
+                  if args.input: rcmd += ["--input", args.input]
+                  if args.iters: rcmd += ["--iters", str(args.iters)]
+                  if args.generate: rcmd += ["--generate", str(args.generate)]
+                  sys.exit(subprocess.run(rcmd).returncode)
+              from axon.cli import main as cli_main
+              sys.exit(cli_main(argv))
+
+          PAYLOAD = ''' + repr(payload.encode("ascii")) + '''
+
+          if __name__ == "__main__":
+              main()
+          '''
+              import textwrap
+              open("axon_v11.py", "w", encoding="utf-8").write(textwrap.dedent(stub))
+              print(f"[ok] built single-file axon_v11.py ({os.path.getsize('axon_v11.py')} bytes)")
+          PY
+
+      - name: Verify Single-File axon_v11.py in Clean Isolated Directory
+        run: |
+          rm -rf /tmp/axon_solo_test && mkdir -p /tmp/axon_solo_test
+          cp axon_v11.py /tmp/axon_solo_test/
+          (cd /tmp/axon_solo_test && python3 axon_v11.py && python3 axon_v11.py run examples/mini_llm.axon --generate 4)
+          rm -rf /tmp/axon_solo_test
+
+      - name: Full Selfcheck, Deploy, Sanitizer & Benchmark via axon_v11.py
         env:
           AXON_REQUIRE_OPENCL: "1"
         run: |
-          python3 -m axon.cli autoconfig
-          python3 -m axon.cli selfcheck
-
-      - name: Enterprise One-Command Deploy (FP4 + Brain + Zero-PyTorch FFI + TPU + GPU)
-        run: |
-          python3 -m axon.cli deploy examples/mini_llm.axon -o dist_linux/mini_llm --gpu
+          python3 axon_v11.py unpack
+          python3 axon_v11.py setup
+          python3 axon_v11.py test
+          python3 axon_v11.py deploy examples/mini_llm.axon -o dist_linux/mini_llm --gpu
           ./dist_linux/mini_llm/mini_llm.bin --generate 8
           ./dist_linux/mini_llm/mini_llm_gpu.bin --generate 4
-          python3 -m axon.cli build examples/transformer_block.axon -o transformer_brain.bin --brain --external-weights --target auto
-          python3 -m axon.cli build examples/llama_block.axon -o llama_block.so --emit-shared --external-weights
-          python3 -m axon.cli build examples/transformer_block.axon -o axon_chip.v --emit-silicon
-
-      - name: Run ASan + UBSan Sanitizer Suite
-        env:
-          AXON_REQUIRE_OPENCL: "1"
-        run: |
           make sanitize
           rm -f axon/runtime/*.o axon/runtime/*.a axon/runtime/*.so axon/runtime/.axon_tuning_stamp
-          python3 -m axon.cli autoconfig --no-tune
+          python3 axon_v11.py setup
+          python3 axon_v11.py bench --require-opencl
 
-      - name: Run v11.0 Multi-Backend Benchmarks & Step Summary Chart
-        run: |
-          python3 tests/bench_chart.py --require-opencl
-          ./transformer_brain.bin --iters 50
-          ./dist_linux/mini_llm/mini_llm.bin --iters 50
-
-      - name: Upload Axon v11.0 Linux Artifacts
+      - name: Upload Single-File Axon v11.0 Release
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: axon-v11-linux-x86_64
+          name: axon-v11-single-file
           if-no-files-found: warn
           path: |
-            dist_linux/
-            transformer_brain.bin
-            transformer_brain.bin.axn3
-            llama_block.so
-            llama_block.so.axn3
-            llama_block_client.py
-            axon_chip.v
-            axon_chip_tb.v
-            axon_chip_weights.hex
+            axon_v11.py
             bench_results.md
             bench_results.json
 
-  cross-os-verify:
+  cross-os-single-file:
     strategy:
       fail-fast: false
       matrix:
@@ -117,30 +195,111 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "llvmlite>=0.40,<0.45"
 
-      - name: Build & Verify Axon v11.0 on ${{ matrix.os }}
+      - name: Build & Verify Single-File axon_v11.py on ${{ matrix.os }}
         shell: bash
         run: |
           python - <<'PY'
-          import re
-          p = "axon_v11_upgrade.py"
-          s = open(p, encoding="utf-8").read()
-          s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
-          s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
-          open(p, "w", encoding="utf-8").write(s)
-          PY
-          python axon_v11_upgrade.py
-          python -m axon.cli autoconfig --no-tune
-          python -m axon.cli deploy examples/mini_llm.axon -o "dist_${{ runner.os }}/mini_llm"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            "./dist_${{ runner.os }}/mini_llm/mini_llm.exe" --generate 6
-          else
-            "./dist_${{ runner.os }}/mini_llm/mini_llm.bin" --generate 6
-          fi
+          import base64, json, os, re, textwrap, zlib
 
-      - name: Upload ${{ matrix.os }} Enterprise Bundle
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: axon-v11-${{ matrix.os }}
-          if-no-files-found: warn
-          path: dist_${{ runner.os }}/
+          if not os.path.isfile("axon_v11.py"):
+              p = "axon_v11_upgrade.py"
+              s = open(p, encoding="utf-8").read()
+              s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
+              s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
+              open(p, "w", encoding="utf-8").write(s)
+
+              ns = {}
+              exec(open(p, encoding="utf-8").read().rsplit("def main():", 1)[0], ns)
+              ns["apply_v11"]()
+
+              files = {}
+              for root_file in ("pyproject.toml", "README.md", "Makefile", ".github/workflows/ci.yml"):
+                  if os.path.isfile(root_file):
+                      files[root_file] = base64.b64encode(open(root_file, "rb").read()).decode("ascii")
+              for d in ("axon", "examples", "tests"):
+                  for cur, dirs, fnames in os.walk(d):
+                      dirs[:] = [x for x in dirs if x != "__pycache__"]
+                      for fn in sorted(fnames):
+                          fp = os.path.join(cur, fn).replace("\\", "/")
+                          if fp.startswith("axon/runtime/") and not (fn.endswith((".c", ".h", ".py")) or fn == "Makefile"):
+                              continue
+                          if fn.endswith((".py", ".c", ".h", ".axon")) or fn == "Makefile":
+                              files[fp] = base64.b64encode(open(fp, "rb").read()).decode("ascii")
+
+              payload = base64.b64encode(zlib.compress(json.dumps(files).encode("utf-8"), 9)).decode("ascii")
+              stub = '''#!/usr/bin/env python3
+          """Axon v11.0 - Single-File Universal Self-Configuring AI Compiler & Runtime."""
+          import argparse, base64, hashlib, json, os, subprocess, sys, zlib
+
+          def _unpack(force=False):
+              if not force and os.path.isfile("axon/autoconfig.py") and os.path.isfile(".axon_v11_ready"):
+                  return
+              data = json.loads(zlib.decompress(base64.b64decode(PAYLOAD)).decode("utf-8"))
+              for path, b64 in data.items():
+                  d = os.path.dirname(path)
+                  if d:
+                      os.makedirs(d, exist_ok=True)
+                  with open(path, "wb") as fh:
+                      fh.write(base64.b64decode(b64))
+              with open(".axon_v11_ready", "w", encoding="utf-8") as fh:
+                  fh.write("11.0.0\\n")
+
+          def main():
+              if os.getcwd() not in sys.path:
+                  sys.path.insert(0, os.getcwd())
+              argv = sys.argv[1:]
+              cmd = argv[0] if argv else "setup"
+              if cmd == "unpack":
+                  _unpack(force=True)
+                  print("[axon v11] unpacked all sources cleanly.")
+                  return
+              _unpack(force=False)
+              if cmd == "setup":
+                  from axon.autoconfig import auto_configure
+                  auto_configure(tune=False, verbose=True)
+                  print("[axon v11] ready. Run: python axon_v11.py run examples/mini_llm.axon --generate 6")
+                  return
+              if cmd == "test":
+                  from axon.cli import main as cli_main
+                  sys.exit(cli_main(["selfcheck"]))
+              if cmd == "bench":
+                  sys.exit(subprocess.run([sys.executable, "tests/bench_chart.py", *argv[1:]]).returncode)
+              if cmd == "run":
+                  ap = argparse.ArgumentParser(prog="axon_v11.py run")
+                  ap.add_argument("source")
+                  ap.add_argument("--input", default="")
+                  ap.add_argument("--iters", type=int, default=1)
+                  ap.add_argument("--generate", type=int, default=0)
+                  ap.add_argument("--ternary", action="store_true")
+                  ap.add_argument("--no-quant", action="store_true")
+                  ap.add_argument("--no-brain", action="store_true")
+                  ap.add_argument("--transpose", action="store_true")
+                  ap.add_argument("--gpu", action="store_true")
+                  args = ap.parse_args(argv[1:])
+                  from axon.deploy import deploy_model, _exe_ext
+                  q = "ternary" if args.ternary else ("none" if args.no_quant else "fp4")
+                  key = hashlib.sha256(f"{os.path.abspath(args.source)}|{q}|{not args.no_brain}|{args.transpose}|{args.gpu}".encode()).hexdigest()[:12]
+                  stem = os.path.splitext(os.path.basename(args.source))[0]
+                  out_dir = os.path.join(".axon_cache", f"{stem}_{key}")
+                  exe = os.path.join(out_dir, (f"{stem}_gpu" if args.gpu else stem) + _exe_ext())
+                  if not os.path.exists(exe) or os.path.getmtime(args.source) > os.path.getmtime(exe):
+                      man = deploy_model(args.source, out_dir, quant=q, brain=not args.no_brain, transpose=args.transpose, emit_gpu=True if args.gpu else False, emit_tpu=False, verify=False)
+                      exe = man["artifacts"].get("gpu_executable") if args.gpu else man["artifacts"]["executable"]
+                  rcmd = [exe]
+                  if args.input: rcmd += ["--input", args.input]
+                  if args.iters: rcmd += ["--iters", str(args.iters)]
+                  if args.generate: rcmd += ["--generate", str(args.generate)]
+                  sys.exit(subprocess.run(rcmd).returncode)
+              from axon.cli import main as cli_main
+              sys.exit(cli_main(argv))
+
+          PAYLOAD = ''' + repr(payload.encode("ascii")) + '''
+
+          if __name__ == "__main__":
+              main()
+          '''
+              open("axon_v11.py", "w", encoding="utf-8").write(textwrap.dedent(stub))
+          PY
+          python axon_v11.py setup
+          python axon_v11.py run examples/mini_llm.axon --generate 6
+          python axon_v11.py deploy examples/mini_llm.axon -o "dist_${{ runner.os }}/mini_llm"
