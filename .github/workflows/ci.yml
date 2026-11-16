@@ -77,6 +77,28 @@ jobs:
           ):
               s = s.replace(a, b)
           open(p, "w", encoding="utf-8").write(s)
+
+          ns = {}
+          exec(open(p, encoding="utf-8").read().split("def main():")[0], ns)
+          ns["ensure_v11_base"]()
+
+          # Cross-OS IEEE-754 & shared-lib .axn3 fixes
+          rp = "axon/runtime_paths.py"
+          open(rp, "w", encoding="utf-8").write(open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]'))
+          bi = "axon/backend/__init__.py"
+          bs = open(bi, encoding="utf-8").read()
+          bs = bs.replace('"-fno-math-errno"', '"-fno-math-errno","-ffp-contract=off"')
+          bs = bs.replace(
+              'ax_t=(output if output.endswith(".so") else output+".so")+".axn3" if emit_shared else output+".axn3"',
+              'sh_e=".dll" if os.name=="nt" else (".dylib" if sys.platform=="darwin" else ".so"); ax_t=(output if output.endswith((".so",".dll",".dylib")) else output+sh_e)+".axn3" if emit_shared else output+".axn3"',
+          )
+          bs = bs.replace(
+              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
+              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        parsed.data_layout=str(tm.target_data)\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
+          )
+          open(bi, "w", encoding="utf-8").write(bs)
+          if os.path.exists("axon/runtime/.axon_tuning_stamp"):
+              os.remove("axon/runtime/.axon_tuning_stamp")
           PY
           python3 axon_v12_studio.py
           python3 -m axon.cli export-axg examples/mini_llm.axon -o dist_v12/mini_llm --brain
@@ -168,6 +190,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
+          import os
           p = "axon_v12_studio.py"
           s = open(p, encoding="utf-8").read()
           for a, b in (
@@ -215,6 +238,34 @@ jobs:
           ):
               s = s.replace(a, b)
           open(p, "w", encoding="utf-8").write(s)
+
+          ns = {}
+          exec(open(p, encoding="utf-8").read().split("def main():")[0], ns)
+          ns["ensure_v11_base"]()
+
+          rp = "axon/runtime_paths.py"
+          open(rp, "w", encoding="utf-8").write(open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]'))
+          bi = "axon/backend/__init__.py"
+          bs = open(bi, encoding="utf-8").read()
+          bs = bs.replace('"-fno-math-errno"', '"-fno-math-errno","-ffp-contract=off"')
+          bs = bs.replace(
+              'ax_t=(output if output.endswith(".so") else output+".so")+".axn3" if emit_shared else output+".axn3"',
+              'sh_e=".dll" if os.name=="nt" else (".dylib" if sys.platform=="darwin" else ".so"); ax_t=(output if output.endswith((".so",".dll",".dylib")) else output+sh_e)+".axn3" if emit_shared else output+".axn3"',
+          )
+          bs = bs.replace(
+              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
+              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        parsed.data_layout=str(tm.target_data)\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
+          )
+          open(bi, "w", encoding="utf-8").write(bs)
+
+          mc = "axon/runtime/axon_main.c"
+          ms = open(mc, encoding="utf-8").read().replace(
+              'fprintf(stderr,"input alloc failed\\n");',
+              'fprintf(stderr,"input alloc failed (ndim=%lld shape=[%lld,%lld,%lld,%lld] need=%lld inp=%p)\\n",(long long)ndim,(long long)shape[0],(long long)shape[1],(long long)shape[2],(long long)shape[3],(long long)need,(void*)inp);',
+          )
+          open(mc, "w", encoding="utf-8").write(ms)
+          if os.path.exists("axon/runtime/.axon_tuning_stamp"):
+              os.remove("axon/runtime/.axon_tuning_stamp")
           PY
           python axon_v12_studio.py
           python -m axon.cli export-axg examples/mini_llm.axon -o dist_v12/mini_llm --brain
