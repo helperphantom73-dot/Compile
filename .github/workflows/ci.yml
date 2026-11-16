@@ -28,7 +28,7 @@ jobs:
       - name: Build Unified Single-File axon_v11.py
         run: |
           python3 - <<'PY'
-          import base64, json, os, re, zlib
+          import base64, json, os, re, textwrap, zlib
 
           if not os.path.isfile("axon_v11.py"):
               p = "axon_v11_upgrade.py"
@@ -40,6 +40,13 @@ jobs:
               ns = {}
               exec(open(p, encoding="utf-8").read().rsplit("def main():", 1)[0], ns)
               ns["apply_v11"]()
+
+              bi = "axon/backend/__init__.py"
+              bs = open(bi, encoding="utf-8").read().replace(
+                  "tm=target.create_target_machine(opt=3, reloc='pic')",
+                  "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')",
+              )
+              open(bi, "w", encoding="utf-8").write(bs)
 
               files = {}
               for root_file in ("pyproject.toml", "README.md", "Makefile", ".github/workflows/ci.yml"):
@@ -127,7 +134,6 @@ jobs:
           if __name__ == "__main__":
               main()
           '''
-              import textwrap
               open("axon_v11.py", "w", encoding="utf-8").write(textwrap.dedent(stub))
               print(f"[ok] built single-file axon_v11.py ({os.path.getsize('axon_v11.py')} bytes)")
           PY
@@ -211,6 +217,13 @@ jobs:
               ns = {}
               exec(open(p, encoding="utf-8").read().rsplit("def main():", 1)[0], ns)
               ns["apply_v11"]()
+
+              bi = "axon/backend/__init__.py"
+              bs = open(bi, encoding="utf-8").read().replace(
+                  "tm=target.create_target_machine(opt=3, reloc='pic')",
+                  "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')",
+              )
+              open(bi, "w", encoding="utf-8").write(bs)
 
               files = {}
               for root_file in ("pyproject.toml", "README.md", "Makefile", ".github/workflows/ci.yml"):
