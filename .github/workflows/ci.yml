@@ -84,7 +84,9 @@ jobs:
           ns["ensure_v11_base"]()
 
           rp = "axon/runtime_paths.py"
-          open(rp, "w", encoding="utf-8").write(open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]'))
+          rs = open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]')
+          open(rp, "w", encoding="utf-8").write(rs)
+
           bi = "axon/backend/__init__.py"
           bs = open(bi, encoding="utf-8").read()
           bs = bs.replace('"-fno-math-errno"', '"-fno-math-errno","-ffp-contract=off"')
@@ -244,7 +246,9 @@ jobs:
           ns["ensure_v11_base"]()
 
           rp = "axon/runtime_paths.py"
-          open(rp, "w", encoding="utf-8").write(open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]'))
+          rs = open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]')
+          open(rp, "w", encoding="utf-8").write(rs)
+
           bi = "axon/backend/__init__.py"
           bs = open(bi, encoding="utf-8").read()
           bs = bs.replace('"-fno-math-errno"', '"-fno-math-errno","-ffp-contract=off"')
