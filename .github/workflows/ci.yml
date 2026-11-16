@@ -192,7 +192,7 @@ jobs:
         shell: bash
         run: |
           python - <<'PY'
-          import os
+          import os, subprocess, tempfile
           p = "axon_v12_studio.py"
           s = open(p, encoding="utf-8").read()
           for a, b in (
@@ -260,14 +260,50 @@ jobs:
               "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
               "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        parsed.data_layout=str(tm.target_data)\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
           )
+          bs = bs.replace(
+              'ctypes.CDLL(os.path.abspath(self.so_path))',
+              'ctypes.CDLL(os.path.abspath(self.so_path), winmode=0) if os.name=="nt" else ctypes.CDLL(os.path.abspath(self.so_path))',
+          )
+          if os.name == "nt":
+              import llvmlite.binding as llvm
+              from axon.frontend import Lexer, Parser, Semantic
+              from axon.ir import IRBuilder
+              from axon.passes import Pipeline
+              open(bi, "w", encoding="utf-8").write(bs)
+              from axon.backend import LLVMBackend, Linker
+              src_mlp = open("examples/mlp.axon", encoding="utf-8").read()
+              ast = Parser(Lexer(src_mlp).tokenize()).parse(); Semantic().analyze(ast)
+              g_test = Pipeline(quant=False).run(IRBuilder().build(ast))
+              chosen_triple = None
+              with tempfile.TemporaryDirectory() as td:
+                  csrc = os.path.join(td, "t.c")
+                  open(csrc, "w").write('#include <stdio.h>\n#include <stdint.h>\nint64_t axon_get_input_ndim(void);\nvoid axon_get_input_shape(int64_t*);\nint main(void){ int64_t s[4]={0}; axon_get_input_shape(s); printf("%lld,%lld\\n",(long long)s[0],(long long)s[1]); return !(s[0]==1 && s[1]==4); }\n')
+                  for cand in (llvm.get_default_triple(), "x86_64-w64-windows-gnu", "x86_64-w64-mingw32"):
+                      try:
+                          o = os.path.join(td, "m.o"); e = os.path.join(td, "t.exe")
+                          LLVMBackend(target_triple=cand).compile(g_test, o)
+                          print(f"[win-diag] triple={cand} objdump:")
+                          print(subprocess.run(["objdump", "-dr", o], capture_output=True, text=True).stdout[:800])
+                          Linker.link([o, csrc], e)
+                          rr = subprocess.run([e], capture_output=True, text=True)
+                          print(f"[win-diag] triple={cand} rc={rr.returncode} out={rr.stdout.strip()} err={rr.stderr.strip()}")
+                          if rr.returncode == 0 and chosen_triple is None:
+                              chosen_triple = cand
+                      except Exception as ex:
+                          print(f"[win-diag] triple={cand} err={ex}")
+              if chosen_triple:
+                  print(f"[win-diag] SELECTED TRIPLE: {chosen_triple}")
+                  bs = bs.replace("self.triple=target_triple or _default_llvm_triple();", f"self.triple=target_triple or {chosen_triple!r};")
           open(bi, "w", encoding="utf-8").write(bs)
 
-          mc = "axon/runtime/axon_main.c"
-          ms = open(mc, encoding="utf-8").read().replace(
-              'fprintf(stderr,"input alloc failed\\n");',
-              'fprintf(stderr,"input alloc failed (ndim=%lld shape=[%lld,%lld,%lld,%lld] need=%lld inp=%p)\\n",(long long)ndim,(long long)shape[0],(long long)shape[1],(long long)shape[2],(long long)shape[3],(long long)need,(void*)inp);',
-          )
-          open(mc, "w", encoding="utf-8").write(ms)
+          for fp in ("tests/test_axon.py", "axon/cli.py", "tests/bench_chart.py"):
+              txt = open(fp, encoding="utf-8").read()
+              txt = txt.replace(
+                  "ctypes.CDLL(str(rt.shared_lib))",
+                  '(ctypes.CDLL(str(rt.shared_lib), winmode=0) if os.name=="nt" else ctypes.CDLL(str(rt.shared_lib)))',
+              )
+              open(fp, "w", encoding="utf-8").write(txt)
+
           if os.path.exists("axon/runtime/.axon_tuning_stamp"):
               os.remove("axon/runtime/.axon_tuning_stamp")
           PY
