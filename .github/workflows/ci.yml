@@ -35,6 +35,22 @@ jobs:
               s = open(p, encoding="utf-8").read()
               s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
               s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
+              s = s.replace(
+                  "    return _aligned_malloc(size, align);",
+                  "    if(align<sizeof(void*))align=sizeof(void*);\n"
+                  "    if(size>SIZE_MAX-align-sizeof(void*))return NULL;\n"
+                  "    void*raw=malloc(size+align+sizeof(void*)); if(!raw)return NULL;\n"
+                  "    uintptr_t addr=((uintptr_t)raw+sizeof(void*)+align-1u)&~(uintptr_t)(align-1u);\n"
+                  "    ((void**)addr)[-1]=raw; return (void*)addr;"
+              )
+              s = s.replace(
+                  "    _aligned_free(p);",
+                  "    if(p) free(((void**)p)[-1]);"
+              )
+              s = s.replace(
+                  'fprintf(stderr,"input alloc failed\\n");',
+                  'fprintf(stderr,"input alloc failed (ndim=%lld shape=[%lld,%lld,%lld,%lld] need=%lld inp=%p)\\n",(long long)ndim,(long long)shape[0],(long long)shape[1],(long long)shape[2],(long long)shape[3],(long long)need,(void*)inp);'
+              )
               open(p, "w", encoding="utf-8").write(s)
 
               ns = {}
@@ -44,7 +60,7 @@ jobs:
               bi = "axon/backend/__init__.py"
               bs = open(bi, encoding="utf-8").read().replace(
                   "tm=target.create_target_machine(opt=3, reloc='pic')",
-                  "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')",
+                  "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic', codemodel='default'); parsed.data_layout=str(tm.target_data)",
               )
               open(bi, "w", encoding="utf-8").write(bs)
 
@@ -212,6 +228,22 @@ jobs:
               s = open(p, encoding="utf-8").read()
               s = s.replace('.split("def main():")[0]', '.rsplit("def main():", 1)[0]')
               s = re.sub(r'printf\("%d\|%s[^"]*",\s*is_gpu,\s*nm\)', 'printf("%d|%s", is_gpu, nm)', s)
+              s = s.replace(
+                  "    return _aligned_malloc(size, align);",
+                  "    if(align<sizeof(void*))align=sizeof(void*);\n"
+                  "    if(size>SIZE_MAX-align-sizeof(void*))return NULL;\n"
+                  "    void*raw=malloc(size+align+sizeof(void*)); if(!raw)return NULL;\n"
+                  "    uintptr_t addr=((uintptr_t)raw+sizeof(void*)+align-1u)&~(uintptr_t)(align-1u);\n"
+                  "    ((void**)addr)[-1]=raw; return (void*)addr;"
+              )
+              s = s.replace(
+                  "    _aligned_free(p);",
+                  "    if(p) free(((void**)p)[-1]);"
+              )
+              s = s.replace(
+                  'fprintf(stderr,"input alloc failed\\n");',
+                  'fprintf(stderr,"input alloc failed (ndim=%lld shape=[%lld,%lld,%lld,%lld] need=%lld inp=%p)\\n",(long long)ndim,(long long)shape[0],(long long)shape[1],(long long)shape[2],(long long)shape[3],(long long)need,(void*)inp);'
+              )
               open(p, "w", encoding="utf-8").write(s)
 
               ns = {}
@@ -221,7 +253,7 @@ jobs:
               bi = "axon/backend/__init__.py"
               bs = open(bi, encoding="utf-8").read().replace(
                   "tm=target.create_target_machine(opt=3, reloc='pic')",
-                  "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')",
+                  "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic', codemodel='default'); parsed.data_layout=str(tm.target_data)",
               )
               open(bi, "w", encoding="utf-8").write(bs)
 
