@@ -271,7 +271,9 @@ jobs:
               from axon.frontend import Lexer, Parser, Semantic
               from axon.ir import IRBuilder
               from axon.passes import Pipeline
+              from axon.runtime_paths import ensure_runtime
               from axon.backend import LLVMBackend, Linker
+              rt = ensure_runtime()
               src_mlp = open("examples/mlp.axon", encoding="utf-8").read()
               ast = Parser(Lexer(src_mlp).tokenize()).parse(); Semantic().analyze(ast)
               g_test = Pipeline(quant=False).run(IRBuilder().build(ast))
@@ -279,7 +281,9 @@ jobs:
               logs = []
               with tempfile.TemporaryDirectory() as td:
                   csrc = os.path.join(td, "t.c")
-                  open(csrc, "w").write('#include <stdio.h>\n#include <stdint.h>\nint64_t axon_get_input_ndim(void);\nvoid axon_get_input_shape(int64_t*);\nint main(void){ int64_t s[4]={0}; int64_t nd=axon_get_input_ndim(); axon_get_input_shape(s); printf("nd=%lld s=%lld,%lld\\n",(long long)nd,(long long)s[0],(long long)s[1]); return !(nd==1 && s[0]==1 && s[1]==4) && !(nd==2 && s[0]==1 && s[1]==4); }\n')
+                  wstub = os.path.join(td, "ws.c")
+                  open(wstub, "w").write('#include <stdint.h>\nvoid axon_weights_get(const void**p,int64_t*n){*p=0;*n=0;}\n')
+                  open(csrc, "w").write('#include <stdio.h>\n#include <stdint.h>\nint64_t axon_get_input_ndim(void);\nvoid axon_get_input_shape(int64_t*);\nint main(void){ int64_t s[4]={0}; int64_t nd=axon_get_input_ndim(); axon_get_input_shape(s); printf("nd=%lld s=%lld,%lld\\n",(long long)nd,(long long)s[0],(long long)s[1]); return !(nd==2 && s[0]==1 && s[1]==4); }\n')
                   for cand in (llvm.get_default_triple(), "x86_64-w64-windows-gnu", "x86_64-w64-mingw32"):
                       try:
                           o = os.path.join(td, "m.o"); e = os.path.join(td, "t.exe")
@@ -287,7 +291,7 @@ jobs:
                           od = subprocess.run(["objdump", "-d", o], capture_output=True, text=True).stdout
                           idx = od.find("<axon_get_input_shape>")
                           snip = od[idx:idx+320] if idx >= 0 else od[-400:]
-                          Linker.link([o, csrc], e)
+                          Linker.link([o, csrc, wstub], e, static_rt=str(rt.static_lib))
                           rr = subprocess.run([e], capture_output=True, text=True)
                           logs.append(f"TRIPLE={cand} rc={rr.returncode} out={rr.stdout.strip()} err={rr.stderr.strip()}\n{snip}")
                           if rr.returncode == 0 and chosen_triple is None:
