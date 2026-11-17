@@ -116,6 +116,16 @@ jobs:
                "                    }\n"
                "                }\n"
                "            }"),
+              ("static int run_studio_forward(StudioModel *m, const float *in_vals, float *out_vals, int64_t *out_len) {",
+               "static void studio_aligned_free(void *p) {\n"
+               "    if (!p) return;\n"
+               "#ifdef _WIN32\n"
+               "    _aligned_free(p);\n"
+               "#else\n"
+               "    free(p);\n"
+               "#endif\n"
+               "}\n"
+               "static int run_studio_forward(StudioModel *m, const float *in_vals, float *out_vals, int64_t *out_len) {"),
               (
                   "            CWeight *cw = find_cweight(m, n->weight);\n"
                   "            if (!cw) { free(vals); axon_arena_destroy(); return -1; }\n"
@@ -128,14 +138,7 @@ jobs:
                   "            int64_t t1[1] = {1};\n"
                   "            AxonTensor *t = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
                   "            if (!t) { for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return AXON_ERR_NOMEM; }\n"
-                  "            if (t->owns_data) {\n"
-                  "#ifdef _WIN32\n"
-                  "                _aligned_free(t->data);\n"
-                  "#else\n"
-                  "                free(t->data);\n"
-                  "#endif\n"
-                  "                t->owns_data = false;\n"
-                  "            }\n"
+                  "            if (t->owns_data) { studio_aligned_free(t->data); t->owns_data = false; }\n"
                   "            t->ndim = cw->ndim;\n"
                   "            memset(t->shape, 0, sizeof(t->shape)); memset(t->strides, 0, sizeof(t->strides));\n"
                   "            int64_t st_v = 1;\n"
@@ -156,8 +159,8 @@ jobs:
                   "                AxonTensor *S = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
                   "                AxonTensor *W_reg = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
                   "                if (!S || !W_reg) { axon_tensor_free(S); axon_tensor_free(W_reg); rc = AXON_ERR_NOMEM; } else {\n"
-                  "                    if (S->owns_data) { free(S->data); S->owns_data = false; }\n"
-                  "                    if (W_reg->owns_data) { free(W_reg->data); W_reg->owns_data = false; }\n"
+                  "                    if (S->owns_data) { studio_aligned_free(S->data); S->owns_data = false; }\n"
+                  "                    if (W_reg->owns_data) { studio_aligned_free(W_reg->data); W_reg->owns_data = false; }\n"
                   "                    S->ndim = 2; S->shape[0] = sshp[0]; S->shape[1] = sshp[1]; S->strides[0] = sshp[1]; S->strides[1] = 1;\n"
                   "                    S->data = cw->sig_data;\n"
                   "                    W_reg->ndim = 2; W_reg->shape[0] = cw->shape[0]; W_reg->shape[1] = cw->shape[1]; W_reg->strides[0] = cw->shape[1]; W_reg->strides[1] = 1;\n"
@@ -250,12 +253,16 @@ jobs:
           bs = open(bi, encoding="utf-8").read()
           bs = bs.replace('"-fno-math-errno"', '"-fno-math-errno","-ffp-contract=off"')
           bs = bs.replace(
+              'if "mingw" in out: return out',
+              'if "mingw" in out: return "x86_64-w64-windows-gnu" if ("x86_64" in out or "amd64" in out) else out',
+          )
+          bs = bs.replace(
               'ax_t=(output if output.endswith(".so") else output+".so")+".axn3" if emit_shared else output+".axn3"',
               'sh_e=".dll" if os.name=="nt" else (".dylib" if sys.platform=="darwin" else ".so"); ax_t=(output if output.endswith((".so",".dll",".dylib")) else output+sh_e)+".axn3" if emit_shared else output+".axn3"',
           )
           bs = bs.replace(
               "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
-              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        parsed.data_layout=str(tm.target_data)\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
+              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic', codemodel='default')\n        parsed.data_layout=str(tm.target_data)\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
           )
           open(bi, "w", encoding="utf-8").write(bs)
           if os.path.exists("axon/runtime/.axon_tuning_stamp"):
@@ -439,6 +446,16 @@ jobs:
                "                    }\n"
                "                }\n"
                "            }"),
+              ("static int run_studio_forward(StudioModel *m, const float *in_vals, float *out_vals, int64_t *out_len) {",
+               "static void studio_aligned_free(void *p) {\n"
+               "    if (!p) return;\n"
+               "#ifdef _WIN32\n"
+               "    _aligned_free(p);\n"
+               "#else\n"
+               "    free(p);\n"
+               "#endif\n"
+               "}\n"
+               "static int run_studio_forward(StudioModel *m, const float *in_vals, float *out_vals, int64_t *out_len) {"),
               (
                   "            CWeight *cw = find_cweight(m, n->weight);\n"
                   "            if (!cw) { free(vals); axon_arena_destroy(); return -1; }\n"
@@ -451,14 +468,7 @@ jobs:
                   "            int64_t t1[1] = {1};\n"
                   "            AxonTensor *t = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
                   "            if (!t) { for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return AXON_ERR_NOMEM; }\n"
-                  "            if (t->owns_data) {\n"
-                  "#ifdef _WIN32\n"
-                  "                _aligned_free(t->data);\n"
-                  "#else\n"
-                  "                free(t->data);\n"
-                  "#endif\n"
-                  "                t->owns_data = false;\n"
-                  "            }\n"
+                  "            if (t->owns_data) { studio_aligned_free(t->data); t->owns_data = false; }\n"
                   "            t->ndim = cw->ndim;\n"
                   "            memset(t->shape, 0, sizeof(t->shape)); memset(t->strides, 0, sizeof(t->strides));\n"
                   "            int64_t st_v = 1;\n"
@@ -479,8 +489,8 @@ jobs:
                   "                AxonTensor *S = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
                   "                AxonTensor *W_reg = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
                   "                if (!S || !W_reg) { axon_tensor_free(S); axon_tensor_free(W_reg); rc = AXON_ERR_NOMEM; } else {\n"
-                  "                    if (S->owns_data) { free(S->data); S->owns_data = false; }\n"
-                  "                    if (W_reg->owns_data) { free(W_reg->data); W_reg->owns_data = false; }\n"
+                  "                    if (S->owns_data) { studio_aligned_free(S->data); S->owns_data = false; }\n"
+                  "                    if (W_reg->owns_data) { studio_aligned_free(W_reg->data); W_reg->owns_data = false; }\n"
                   "                    S->ndim = 2; S->shape[0] = sshp[0]; S->shape[1] = sshp[1]; S->strides[0] = sshp[1]; S->strides[1] = 1;\n"
                   "                    S->data = cw->sig_data;\n"
                   "                    W_reg->ndim = 2; W_reg->shape[0] = cw->shape[0]; W_reg->shape[1] = cw->shape[1]; W_reg->strides[0] = cw->shape[1]; W_reg->strides[1] = 1;\n"
@@ -573,12 +583,16 @@ jobs:
           bs = open(bi, encoding="utf-8").read()
           bs = bs.replace('"-fno-math-errno"', '"-fno-math-errno","-ffp-contract=off"')
           bs = bs.replace(
+              'if "mingw" in out: return out',
+              'if "mingw" in out: return "x86_64-w64-windows-gnu" if ("x86_64" in out or "amd64" in out) else out',
+          )
+          bs = bs.replace(
               'ax_t=(output if output.endswith(".so") else output+".so")+".axn3" if emit_shared else output+".axn3"',
               'sh_e=".dll" if os.name=="nt" else (".dylib" if sys.platform=="darwin" else ".so"); ax_t=(output if output.endswith((".so",".dll",".dylib")) else output+sh_e)+".axn3" if emit_shared else output+".axn3"',
           )
           bs = bs.replace(
               "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
-              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic')\n        parsed.data_layout=str(tm.target_data)\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
+              "tm=target.create_target_machine(opt=3, reloc='default' if ('windows' in self.triple or 'mingw' in self.triple) else 'pic', codemodel='default')\n        parsed.data_layout=str(tm.target_data)\n        with open(out_obj,\"wb\") as f: f.write(tm.emit_object(parsed))",
           )
           bs = bs.replace(
               'ctypes.CDLL(os.path.abspath(self.so_path))',
@@ -604,7 +618,7 @@ jobs:
                   wstub = os.path.join(td, "ws.c")
                   open(wstub, "w").write('#include <stdint.h>\nvoid axon_weights_get(const void**p,int64_t*n){*p=0;*n=0;}\n')
                   open(csrc, "w").write('#include <stdio.h>\n#include <stdint.h>\nint64_t axon_get_input_ndim(void);\nvoid axon_get_input_shape(int64_t*);\nint main(void){ int64_t s[4]={0}; int64_t nd=axon_get_input_ndim(); axon_get_input_shape(s); printf("nd=%lld s=%lld,%lld\\n",(long long)nd,(long long)s[0],(long long)s[1]); return !(nd==2 && s[0]==1 && s[1]==4); }\n')
-                  for cand in (llvm.get_default_triple(), "x86_64-w64-windows-gnu", "x86_64-w64-mingw32"):
+                  for cand in ("x86_64-w64-windows-gnu", llvm.get_default_triple()):
                       try:
                           o = os.path.join(td, "m.o"); e = os.path.join(td, "t.exe")
                           LLVMBackend(target_triple=cand).compile(g_test, o)
@@ -616,6 +630,7 @@ jobs:
                           logs.append(f"TRIPLE={cand} rc={rr.returncode} out={rr.stdout.strip()} err={rr.stderr.strip()}\n{snip}")
                           if rr.returncode == 0 and chosen_triple is None:
                               chosen_triple = cand
+                              break
                       except Exception as ex:
                           logs.append(f"TRIPLE={cand} EXC={ex}")
               if not chosen_triple:
