@@ -40,7 +40,20 @@ jobs:
               ("    }\n}\n'''\n\n\ndef _find_android_cc():", '    }\n}\n"""\n\n\ndef _find_android_cc():'),
               ("SN(11,15,2,4,8,3,5,8,10);", "SN(11,15,2,4,8,3,5,8,10,NULL);"),
               ('\'    sp.add_parser("doctor")\'', '\'    pi=sp.add_parser("inspect")\''),
+              ("#  include <windows.h>\n#  include <direct.h>", "#  include <windows.h>\n#  include <direct.h>\n#  include <malloc.h>"),
+              ("if (now - qs.week_start >= AXON_WEEK_SEC) { qs.week_start = now; qs.active_sec = 0.0; }",
+               "if (now >= qs.week_start && (now - qs.week_start) >= AXON_WEEK_SEC) { qs.week_start = now; qs.active_sec = 0.0; }"),
               ("uint8_t hdr[56]; if (fread(hdr, 1, 56, fg) != 56", "uint8_t hdr[60]; if (fread(hdr, 1, 60, fg) != 60"),
+              ("if (ver != 1 || nn == 0 || nn > 4096) { fclose(fg); return -1; }\n"
+               "    size_t rsz = (size_t)nn * 72; uint8_t *rb = (uint8_t*)malloc(rsz); char *nb = (char*)malloc(nlen + 1);",
+               "if (ver != 1 || nn == 0 || nn > 4096 || in_i >= nn || out_i >= nn || in_nd == 0 || in_nd > 4 || nlen > 16777216u) { fclose(fg); return -1; }\n"
+               "    size_t rsz = (size_t)nn * 72; uint8_t *rb = (uint8_t*)malloc(rsz); char *nb = (char*)malloc((size_t)nlen + 1);"),
+              ("cn->op = (int)op; cn->nin = (int)nin; cn->ndim = (int)nd;\n"
+               "        memcpy(cn->inputs, r+16, 16); memcpy(cn->shape, r+32, 32); memcpy(&cn->keep, r+64, 4); memcpy(&cn->region_blocked, r+68, 4);",
+               "cn->op = (int)op; cn->nin = (int)nin; cn->ndim = (int)nd;\n"
+               "        if (cn->ndim < 1 || cn->ndim > 4 || cn->nin < 0 || cn->nin > 4) { free(rb); free(nb); axon_unload_weights_file(); return -1; }\n"
+               "        memcpy(cn->inputs, r+16, 16); memcpy(cn->shape, r+32, 32); memcpy(&cn->keep, r+64, 4); memcpy(&cn->region_blocked, r+68, 4);\n"
+               "        for (int k=0; k<cn->nin; ++k) if (cn->inputs[k] < 0 || (uint32_t)cn->inputs[k] >= i) { free(rb); free(nb); axon_unload_weights_file(); return -1; }"),
               ("float *reg_data; float *sig_data; int64_t R, keep;\n} CWeight;", "float *reg_data; float *sig_data; int64_t R, keep;\n    int native_dtype;\n} CWeight;"),
               (
                   "if (cn->op == 1 && cn->weight[0]) {\n"
@@ -65,16 +78,150 @@ jobs:
                   "            }\n"
                   "        }",
               ),
+              ("    int idx = 0, cur_node = -1;\n    CNode *nodes = NULL; int ncap = 0, ncnt = 0;",
+               "    int idx = 0, cur_node = -1; int64_t prev_N = 0;\n    CNode *nodes = NULL; int ncap = 0, ncnt = 0;"),
+              ("        unsigned long long b0=0, b1=0; if (sscanf(db+1, \" %llu , %llu\", &b0, &b1) != 2 || b1 < b0 || b1 > data_len) break;\n"
+               "        int64_t K = transpose ? c : r, N = transpose ? r : c, tot = K * N;\n"
+               "        float *wf = (float*)malloc((size_t)tot * sizeof(float)); if (!wf) break;",
+               "        unsigned long long b0=0, b1=0; if (sscanf(db+1, \" %llu , %llu\", &b0, &b1) != 2 || b1 < b0 || b1 > data_len) break;\n"
+               "        unsigned long long esz = (dt == 0) ? 4ULL : 2ULL;\n"
+               "        if ((unsigned long long)r > 100000000ULL || (unsigned long long)c > 100000000ULL || b1 - b0 != (unsigned long long)r * (unsigned long long)c * esz) break;\n"
+               "        int64_t K = transpose ? c : r, N = transpose ? r : c, tot = K * N;\n"
+               "        if (idx > 0 && K != prev_N) break;\n"
+               "        prev_N = N;\n"
+               "        float *wf = (float*)malloc((size_t)tot * sizeof(float)); if (!wf) break;"),
+              ("            if (be && bdb && bdb < be && sscanf(bdb+1, \" %llu , %llu\", &bb0, &bb1) == 2 && bb1 <= data_len && bb1 - bb0 == (unsigned long long)N*4) {\n"
+               "                float *bf = (float*)malloc((size_t)N * sizeof(float)); memcpy(bf, data_base + bb0, (size_t)N * 4);\n"
+               "                char bn[64]; snprintf(bn, sizeof(bn), \"l%d_b\", idx);\n"
+               "                int64_t s1[1] = {N}; add_weight(m, bn, 1, s1, bf); free(bf);\n"
+               "                int bi = ncnt; PUSH_NODE(1,1,N,0,0,-1,-1,-1,bn);\n"
+               "                int ai = ncnt; PUSH_NODE(4,2,1,N,2,cur_node,bi,-1,NULL); cur_node = ai;\n"
+               "            }",
+               "            if (be && bdb && bdb < be && sscanf(bdb+1, \" %llu , %llu\", &bb0, &bb1) == 2 && bb1 >= bb0 && bb1 <= data_len) {\n"
+               "                int bdt = (strstr(bo, \"\\\"F16\\\"\") && strstr(bo, \"\\\"F16\\\"\") < be) ? 1 : ((strstr(bo, \"\\\"BF16\\\"\") && strstr(bo, \"\\\"BF16\\\"\") < be) ? 2 : 0);\n"
+               "                unsigned long long bes = (bdt == 0) ? 4ULL : 2ULL;\n"
+               "                if (bb1 - bb0 == (unsigned long long)N * bes) {\n"
+               "                    float *bf = (float*)malloc((size_t)N * sizeof(float));\n"
+               "                    if (bf) {\n"
+               "                        const uint8_t *braw = data_base + bb0;\n"
+               "                        for (int64_t j=0; j<N; ++j) {\n"
+               "                            if (bdt == 0) memcpy(&bf[j], braw + j*4, 4);\n"
+               "                            else if (bdt == 1) { uint16_t h; memcpy(&h, braw + j*2, 2); bf[j] = f16_to_f32(h); }\n"
+               "                            else { uint16_t h; memcpy(&h, braw + j*2, 2); bf[j] = bf16_to_f32(h); }\n"
+               "                        }\n"
+               "                        char bn[64]; snprintf(bn, sizeof(bn), \"l%d_b\", idx);\n"
+               "                        int64_t s1[1] = {N}; add_weight(m, bn, 1, s1, bf); free(bf);\n"
+               "                        int bi = ncnt; PUSH_NODE(1,1,N,0,0,-1,-1,-1,bn);\n"
+               "                        int ai = ncnt; PUSH_NODE(4,2,1,N,2,cur_node,bi,-1,NULL); cur_node = ai;\n"
+               "                    }\n"
+               "                }\n"
+               "            }"),
               (
-                  "if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {\n"
+                  "            CWeight *cw = find_cweight(m, n->weight);\n"
+                  "            if (!cw) { free(vals); axon_arena_destroy(); return -1; }\n"
+                  "            AxonTensor *t = axon_tensor_alloc(cw->ndim, cw->shape, AXON_DTYPE_F32);\n"
+                  "            if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {\n"
                   "                t->data = cw->reg_data; t->owns_data = false; w_mem += (size_t)cw->numel * 4;\n"
                   "            } else if (use_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
-                  "int is_axg = (strcmp(m->format, \"axg1+axn3\") == 0);\n"
+                  "            CWeight *cw = find_cweight(m, n->weight);\n"
+                  "            if (!cw) { for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return -1; }\n"
+                  "            int64_t t1[1] = {1};\n"
+                  "            AxonTensor *t = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
+                  "            if (!t) { for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return AXON_ERR_NOMEM; }\n"
+                  "            if (t->owns_data) {\n"
+                  "#ifdef _WIN32\n"
+                  "                _aligned_free(t->data);\n"
+                  "#else\n"
+                  "                free(t->data);\n"
+                  "#endif\n"
+                  "                t->owns_data = false;\n"
+                  "            }\n"
+                  "            t->ndim = cw->ndim;\n"
+                  "            memset(t->shape, 0, sizeof(t->shape)); memset(t->strides, 0, sizeof(t->strides));\n"
+                  "            int64_t st_v = 1;\n"
+                  "            for (int d = cw->ndim - 1; d >= 0; --d) { t->shape[d] = cw->shape[d]; t->strides[d] = st_v; st_v *= cw->shape[d]; }\n"
+                  "            int is_axg = (strcmp(m->format, \"axg1+axn3\") == 0);\n"
                   "            int want_fp4 = is_axg ? (cw->native_dtype == AXON_DTYPE_FP4) : use_fp4;\n"
                   "            int want_tern = is_axg ? (cw->native_dtype == AXON_DTYPE_TERNARY) : use_tern;\n"
                   "            if (want_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
               ),
               ("} else if (use_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {", "} else if (want_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {"),
+              (
+                  "                AxonTensor *S = axon_tensor_alloc(2, sshp, AXON_DTYPE_F32);\n"
+                  "                S->data = cw->sig_data; S->owns_data = false;\n"
+                  "                AxonTensor *W_reg = axon_tensor_alloc(2, cw->shape, AXON_DTYPE_F32);\n"
+                  "                W_reg->data = cw->reg_data; W_reg->owns_data = false;\n"
+                  "                rc = axon_neuro_matmul_paged(a0, W_reg, S, out, (int32_t)cw->keep, 1);",
+                  "                int64_t t1[1] = {1};\n"
+                  "                AxonTensor *S = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
+                  "                AxonTensor *W_reg = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
+                  "                if (!S || !W_reg) { axon_tensor_free(S); axon_tensor_free(W_reg); rc = AXON_ERR_NOMEM; } else {\n"
+                  "                    if (S->owns_data) { free(S->data); S->owns_data = false; }\n"
+                  "                    if (W_reg->owns_data) { free(W_reg->data); W_reg->owns_data = false; }\n"
+                  "                    S->ndim = 2; S->shape[0] = sshp[0]; S->shape[1] = sshp[1]; S->strides[0] = sshp[1]; S->strides[1] = 1;\n"
+                  "                    S->data = cw->sig_data;\n"
+                  "                    W_reg->ndim = 2; W_reg->shape[0] = cw->shape[0]; W_reg->shape[1] = cw->shape[1]; W_reg->strides[0] = cw->shape[1]; W_reg->strides[1] = 1;\n"
+                  "                    W_reg->data = cw->reg_data;\n"
+                  "                    rc = axon_neuro_matmul_paged(a0, W_reg, S, out, (int32_t)cw->keep, 1);\n"
+                  "                    axon_tensor_free(S); axon_tensor_free(W_reg);\n"
+                  "                }",
+              ),
+              ("if (rc != AXON_OK) { free(vals); axon_arena_destroy(); return rc; }",
+               "if (rc != AXON_OK) { axon_tensor_free(out); for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return rc; }"),
+              ("    free(vals);\n    axon_arena_destroy();",
+               "    for (int j = 0; j < m->num_nodes; ++j) axon_tensor_free(vals[j]);\n    free(vals);\n    axon_arena_destroy();"),
+              ("static void send_http(axon_sock_t c, int code, const char *ctype, const char *body, size_t blen) {",
+               "static void json_esc(const char *s, char *out, size_t cap) {\n"
+               "    size_t j = 0;\n"
+               "    for (size_t i = 0; s && s[i] && j + 3 < cap; ++i) {\n"
+               "        unsigned char ch = (unsigned char)s[i];\n"
+               "        if (ch == '\"' || ch == '\\\\') { out[j++] = '\\\\'; out[j++] = (char)ch; }\n"
+               "        else if (ch >= 0x20) { out[j++] = (char)ch; }\n"
+               "    }\n"
+               "    out[j] = '\\0';\n"
+               "}\n"
+               "static void send_http(axon_sock_t c, int code, const char *ctype, const char *body, size_t blen) {"),
+              ("if (strncmp(p, \"Content-Length:\", 15) == 0 || strncmp(p, \"content-length:\", 15) == 0) {\n"
+               "                            content_len = (size_t)strtoull(p + 15, NULL, 10);\n"
+               "                        }",
+               "const char *cl = \"content-length:\"; int ok_cl = 1;\n"
+               "                        for (int ci = 0; ci < 15; ++ci) if (tolower((unsigned char)p[ci]) != cl[ci]) { ok_cl = 0; break; }\n"
+               "                        if (ok_cl) {\n"
+               "                            content_len = (size_t)strtoull(p + 15, NULL, 10);\n"
+               "                        }"),
+              ("        char json[1024];\n"
+               "        snprintf(json, sizeof(json),\n"
+               "            \"{\\\"edition\\\":\\\"%s\\\",\\\"pro\\\":%d,\\\"is_server\\\":%d,\\\"quota_used_s\\\":%.2f,\\\"quota_locked\\\":%d,\"\n"
+               "            \"\\\"model\\\":\\\"%s\\\",\\\"format\\\":\\\"%s\\\",\\\"mode\\\":\\\"%s\\\",\\\"raw_bytes\\\":%zu,\\\"active_bytes\\\":%zu,\"\n"
+               "            \"\\\"ram_saved\\\":%.2f,\\\"flops_skipped\\\":%.2f,\\\"last_ms\\\":%.4f,\\\"opencl_device\\\":\\\"%s\\\"}\",\n"
+               "            AXON_EDITION_PRO ? \"Axon Pro v12\" : \"Axon Free v12\", AXON_EDITION_PRO, detect_server_env(),\n"
+               "            qused, qlocked, g_model.model_name, g_model.format, g_model.backend_mode,\n"
+               "            g_model.raw_f32_bytes, g_model.active_weight_bytes, g_model.last_ram_saved,\n"
+               "            g_model.last_flops_skipped, g_model.last_ms, g_ocl.available ? g_ocl.device_name : \"none\");",
+               "        char json[1536], emod[256], emode[64], edev[256];\n"
+               "        json_esc(g_model.model_name, emod, sizeof(emod));\n"
+               "        json_esc(g_model.backend_mode, emode, sizeof(emode));\n"
+               "        json_esc(g_ocl.available ? g_ocl.device_name : \"none\", edev, sizeof(edev));\n"
+               "        snprintf(json, sizeof(json),\n"
+               "            \"{\\\"edition\\\":\\\"%s\\\",\\\"pro\\\":%d,\\\"is_server\\\":%d,\\\"quota_used_s\\\":%.2f,\\\"quota_locked\\\":%d,\"\n"
+               "            \"\\\"model\\\":\\\"%s\\\",\\\"format\\\":\\\"%s\\\",\\\"mode\\\":\\\"%s\\\",\\\"raw_bytes\\\":%zu,\\\"active_bytes\\\":%zu,\"\n"
+               "            \"\\\"ram_saved\\\":%.2f,\\\"flops_skipped\\\":%.2f,\\\"last_ms\\\":%.4f,\\\"opencl_device\\\":\\\"%s\\\"}\",\n"
+               "            AXON_EDITION_PRO ? \"Axon Pro v12\" : \"Axon Free v12\", AXON_EDITION_PRO, detect_server_env(),\n"
+               "            qused, qlocked, emod, g_model.format, emode,\n"
+               "            g_model.raw_f32_bytes, g_model.active_weight_bytes, g_model.last_ram_saved,\n"
+               "            g_model.last_flops_skipped, g_model.last_ms, edev);"),
+              ("        if (ms_cl >= 0) {\n"
+               "            snprintf(json, sizeof(json),\n"
+               "                \"{\\\"results\\\":[{\\\"mode\\\":\\\"CPU F32 (SIMD+OMP)\\\",\\\"ms\\\":%.3f,\\\"err\\\":0.0},\"\n"
+               "                \"{\\\"mode\\\":\\\"OpenCL (%s)\\\",\\\"ms\\\":%.3f,\\\"err\\\":%.2e}]}\",\n"
+               "                ms_f32, g_ocl.device_name, ms_cl, err_cl);",
+               "        if (ms_cl >= 0) {\n"
+               "            char edev[256]; json_esc(g_ocl.device_name, edev, sizeof(edev));\n"
+               "            snprintf(json, sizeof(json),\n"
+               "                \"{\\\"results\\\":[{\\\"mode\\\":\\\"CPU F32 (SIMD+OMP)\\\",\\\"ms\\\":%.3f,\\\"err\\\":0.0},\"\n"
+               "                \"{\\\"mode\\\":\\\"OpenCL (%s)\\\",\\\"ms\\\":%.3f,\\\"err\\\":%.2e}]}\",\n"
+               "                ms_f32, edev, ms_cl, err_cl);"),
+              ('"-fno-math-errno",', '"-fno-math-errno", "-ffp-contract=off",'),
           ):
               s = s.replace(a, b)
           open(p, "w", encoding="utf-8").write(s)
@@ -86,6 +233,18 @@ jobs:
           rp = "axon/runtime_paths.py"
           rs = open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]')
           open(rp, "w", encoding="utf-8").write(rs)
+
+          tp = "axon/tools.py"
+          ts = open(tp, encoding="utf-8").read()
+          ts = ts.replace(
+              'exe=os.path.join(tmp,"k")',
+              'exe=os.path.join(tmp,"k.exe" if os.name=="nt" else "k")',
+          )
+          ts = ts.replace(
+              '[os.environ.get("CC") or shutil.which("cc") or "cc",*Evolver._flags()',
+              '[os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang") or "cc",*Evolver._flags()',
+          )
+          open(tp, "w", encoding="utf-8").write(ts)
 
           bi = "axon/backend/__init__.py"
           bs = open(bi, encoding="utf-8").read()
@@ -110,10 +269,12 @@ jobs:
       - name: Verify Zero-Prerequisite Execution in Empty Temp Folder (No Python/LLVM needed)
         run: |
           mkdir -p /tmp/zero_req_free /tmp/zero_req_pro
-          cp dist_v12/axon-studio /tmp/zero_req_free/
-          cp dist_v12/axon-pro-studio /tmp/zero_req_pro/
+          cp dist_v12/axon-studio dist_v12/mini_llm.axg1 dist_v12/mini_llm.axn3 /tmp/zero_req_free/
+          cp dist_v12/axon-pro-studio dist_v12/mini_llm.axg1 dist_v12/mini_llm.axn3 /tmp/zero_req_pro/
           /tmp/zero_req_free/axon-studio --once
+          /tmp/zero_req_free/axon-studio --axg /tmp/zero_req_free/mini_llm.axg1 --axn /tmp/zero_req_free/mini_llm.axn3 --once
           /tmp/zero_req_pro/axon-pro-studio --once
+          /tmp/zero_req_pro/axon-pro-studio --axg /tmp/zero_req_pro/mini_llm.axg1 --axn /tmp/zero_req_pro/mini_llm.axn3 --once
           rm -rf /tmp/zero_req_free /tmp/zero_req_pro
 
       - name: Selfcheck, Sanitizer (ASan+UBSan) & Multi-Backend Benchmarks
@@ -202,7 +363,20 @@ jobs:
               ("    }\n}\n'''\n\n\ndef _find_android_cc():", '    }\n}\n"""\n\n\ndef _find_android_cc():'),
               ("SN(11,15,2,4,8,3,5,8,10);", "SN(11,15,2,4,8,3,5,8,10,NULL);"),
               ('\'    sp.add_parser("doctor")\'', '\'    pi=sp.add_parser("inspect")\''),
+              ("#  include <windows.h>\n#  include <direct.h>", "#  include <windows.h>\n#  include <direct.h>\n#  include <malloc.h>"),
+              ("if (now - qs.week_start >= AXON_WEEK_SEC) { qs.week_start = now; qs.active_sec = 0.0; }",
+               "if (now >= qs.week_start && (now - qs.week_start) >= AXON_WEEK_SEC) { qs.week_start = now; qs.active_sec = 0.0; }"),
               ("uint8_t hdr[56]; if (fread(hdr, 1, 56, fg) != 56", "uint8_t hdr[60]; if (fread(hdr, 1, 60, fg) != 60"),
+              ("if (ver != 1 || nn == 0 || nn > 4096) { fclose(fg); return -1; }\n"
+               "    size_t rsz = (size_t)nn * 72; uint8_t *rb = (uint8_t*)malloc(rsz); char *nb = (char*)malloc(nlen + 1);",
+               "if (ver != 1 || nn == 0 || nn > 4096 || in_i >= nn || out_i >= nn || in_nd == 0 || in_nd > 4 || nlen > 16777216u) { fclose(fg); return -1; }\n"
+               "    size_t rsz = (size_t)nn * 72; uint8_t *rb = (uint8_t*)malloc(rsz); char *nb = (char*)malloc((size_t)nlen + 1);"),
+              ("cn->op = (int)op; cn->nin = (int)nin; cn->ndim = (int)nd;\n"
+               "        memcpy(cn->inputs, r+16, 16); memcpy(cn->shape, r+32, 32); memcpy(&cn->keep, r+64, 4); memcpy(&cn->region_blocked, r+68, 4);",
+               "cn->op = (int)op; cn->nin = (int)nin; cn->ndim = (int)nd;\n"
+               "        if (cn->ndim < 1 || cn->ndim > 4 || cn->nin < 0 || cn->nin > 4) { free(rb); free(nb); axon_unload_weights_file(); return -1; }\n"
+               "        memcpy(cn->inputs, r+16, 16); memcpy(cn->shape, r+32, 32); memcpy(&cn->keep, r+64, 4); memcpy(&cn->region_blocked, r+68, 4);\n"
+               "        for (int k=0; k<cn->nin; ++k) if (cn->inputs[k] < 0 || (uint32_t)cn->inputs[k] >= i) { free(rb); free(nb); axon_unload_weights_file(); return -1; }"),
               ("float *reg_data; float *sig_data; int64_t R, keep;\n} CWeight;", "float *reg_data; float *sig_data; int64_t R, keep;\n    int native_dtype;\n} CWeight;"),
               (
                   "if (cn->op == 1 && cn->weight[0]) {\n"
@@ -227,16 +401,150 @@ jobs:
                   "            }\n"
                   "        }",
               ),
+              ("    int idx = 0, cur_node = -1;\n    CNode *nodes = NULL; int ncap = 0, ncnt = 0;",
+               "    int idx = 0, cur_node = -1; int64_t prev_N = 0;\n    CNode *nodes = NULL; int ncap = 0, ncnt = 0;"),
+              ("        unsigned long long b0=0, b1=0; if (sscanf(db+1, \" %llu , %llu\", &b0, &b1) != 2 || b1 < b0 || b1 > data_len) break;\n"
+               "        int64_t K = transpose ? c : r, N = transpose ? r : c, tot = K * N;\n"
+               "        float *wf = (float*)malloc((size_t)tot * sizeof(float)); if (!wf) break;",
+               "        unsigned long long b0=0, b1=0; if (sscanf(db+1, \" %llu , %llu\", &b0, &b1) != 2 || b1 < b0 || b1 > data_len) break;\n"
+               "        unsigned long long esz = (dt == 0) ? 4ULL : 2ULL;\n"
+               "        if ((unsigned long long)r > 100000000ULL || (unsigned long long)c > 100000000ULL || b1 - b0 != (unsigned long long)r * (unsigned long long)c * esz) break;\n"
+               "        int64_t K = transpose ? c : r, N = transpose ? r : c, tot = K * N;\n"
+               "        if (idx > 0 && K != prev_N) break;\n"
+               "        prev_N = N;\n"
+               "        float *wf = (float*)malloc((size_t)tot * sizeof(float)); if (!wf) break;"),
+              ("            if (be && bdb && bdb < be && sscanf(bdb+1, \" %llu , %llu\", &bb0, &bb1) == 2 && bb1 <= data_len && bb1 - bb0 == (unsigned long long)N*4) {\n"
+               "                float *bf = (float*)malloc((size_t)N * sizeof(float)); memcpy(bf, data_base + bb0, (size_t)N * 4);\n"
+               "                char bn[64]; snprintf(bn, sizeof(bn), \"l%d_b\", idx);\n"
+               "                int64_t s1[1] = {N}; add_weight(m, bn, 1, s1, bf); free(bf);\n"
+               "                int bi = ncnt; PUSH_NODE(1,1,N,0,0,-1,-1,-1,bn);\n"
+               "                int ai = ncnt; PUSH_NODE(4,2,1,N,2,cur_node,bi,-1,NULL); cur_node = ai;\n"
+               "            }",
+               "            if (be && bdb && bdb < be && sscanf(bdb+1, \" %llu , %llu\", &bb0, &bb1) == 2 && bb1 >= bb0 && bb1 <= data_len) {\n"
+               "                int bdt = (strstr(bo, \"\\\"F16\\\"\") && strstr(bo, \"\\\"F16\\\"\") < be) ? 1 : ((strstr(bo, \"\\\"BF16\\\"\") && strstr(bo, \"\\\"BF16\\\"\") < be) ? 2 : 0);\n"
+               "                unsigned long long bes = (bdt == 0) ? 4ULL : 2ULL;\n"
+               "                if (bb1 - bb0 == (unsigned long long)N * bes) {\n"
+               "                    float *bf = (float*)malloc((size_t)N * sizeof(float));\n"
+               "                    if (bf) {\n"
+               "                        const uint8_t *braw = data_base + bb0;\n"
+               "                        for (int64_t j=0; j<N; ++j) {\n"
+               "                            if (bdt == 0) memcpy(&bf[j], braw + j*4, 4);\n"
+               "                            else if (bdt == 1) { uint16_t h; memcpy(&h, braw + j*2, 2); bf[j] = f16_to_f32(h); }\n"
+               "                            else { uint16_t h; memcpy(&h, braw + j*2, 2); bf[j] = bf16_to_f32(h); }\n"
+               "                        }\n"
+               "                        char bn[64]; snprintf(bn, sizeof(bn), \"l%d_b\", idx);\n"
+               "                        int64_t s1[1] = {N}; add_weight(m, bn, 1, s1, bf); free(bf);\n"
+               "                        int bi = ncnt; PUSH_NODE(1,1,N,0,0,-1,-1,-1,bn);\n"
+               "                        int ai = ncnt; PUSH_NODE(4,2,1,N,2,cur_node,bi,-1,NULL); cur_node = ai;\n"
+               "                    }\n"
+               "                }\n"
+               "            }"),
               (
-                  "if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {\n"
+                  "            CWeight *cw = find_cweight(m, n->weight);\n"
+                  "            if (!cw) { free(vals); axon_arena_destroy(); return -1; }\n"
+                  "            AxonTensor *t = axon_tensor_alloc(cw->ndim, cw->shape, AXON_DTYPE_F32);\n"
+                  "            if (use_brain && cw->reg_data && cw->ndim == 2 && !use_gpu) {\n"
                   "                t->data = cw->reg_data; t->owns_data = false; w_mem += (size_t)cw->numel * 4;\n"
                   "            } else if (use_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
-                  "int is_axg = (strcmp(m->format, \"axg1+axn3\") == 0);\n"
+                  "            CWeight *cw = find_cweight(m, n->weight);\n"
+                  "            if (!cw) { for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return -1; }\n"
+                  "            int64_t t1[1] = {1};\n"
+                  "            AxonTensor *t = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
+                  "            if (!t) { for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return AXON_ERR_NOMEM; }\n"
+                  "            if (t->owns_data) {\n"
+                  "#ifdef _WIN32\n"
+                  "                _aligned_free(t->data);\n"
+                  "#else\n"
+                  "                free(t->data);\n"
+                  "#endif\n"
+                  "                t->owns_data = false;\n"
+                  "            }\n"
+                  "            t->ndim = cw->ndim;\n"
+                  "            memset(t->shape, 0, sizeof(t->shape)); memset(t->strides, 0, sizeof(t->strides));\n"
+                  "            int64_t st_v = 1;\n"
+                  "            for (int d = cw->ndim - 1; d >= 0; --d) { t->shape[d] = cw->shape[d]; t->strides[d] = st_v; st_v *= cw->shape[d]; }\n"
+                  "            int is_axg = (strcmp(m->format, \"axg1+axn3\") == 0);\n"
                   "            int want_fp4 = is_axg ? (cw->native_dtype == AXON_DTYPE_FP4) : use_fp4;\n"
                   "            int want_tern = is_axg ? (cw->native_dtype == AXON_DTYPE_TERNARY) : use_tern;\n"
                   "            if (want_fp4 && cw->fp4_buf && cw->ndim == 2 && !use_gpu) {",
               ),
               ("} else if (use_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {", "} else if (want_tern && cw->tern_buf && cw->ndim == 2 && !use_gpu) {"),
+              (
+                  "                AxonTensor *S = axon_tensor_alloc(2, sshp, AXON_DTYPE_F32);\n"
+                  "                S->data = cw->sig_data; S->owns_data = false;\n"
+                  "                AxonTensor *W_reg = axon_tensor_alloc(2, cw->shape, AXON_DTYPE_F32);\n"
+                  "                W_reg->data = cw->reg_data; W_reg->owns_data = false;\n"
+                  "                rc = axon_neuro_matmul_paged(a0, W_reg, S, out, (int32_t)cw->keep, 1);",
+                  "                int64_t t1[1] = {1};\n"
+                  "                AxonTensor *S = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
+                  "                AxonTensor *W_reg = axon_tensor_alloc(1, t1, AXON_DTYPE_F32);\n"
+                  "                if (!S || !W_reg) { axon_tensor_free(S); axon_tensor_free(W_reg); rc = AXON_ERR_NOMEM; } else {\n"
+                  "                    if (S->owns_data) { free(S->data); S->owns_data = false; }\n"
+                  "                    if (W_reg->owns_data) { free(W_reg->data); W_reg->owns_data = false; }\n"
+                  "                    S->ndim = 2; S->shape[0] = sshp[0]; S->shape[1] = sshp[1]; S->strides[0] = sshp[1]; S->strides[1] = 1;\n"
+                  "                    S->data = cw->sig_data;\n"
+                  "                    W_reg->ndim = 2; W_reg->shape[0] = cw->shape[0]; W_reg->shape[1] = cw->shape[1]; W_reg->strides[0] = cw->shape[1]; W_reg->strides[1] = 1;\n"
+                  "                    W_reg->data = cw->reg_data;\n"
+                  "                    rc = axon_neuro_matmul_paged(a0, W_reg, S, out, (int32_t)cw->keep, 1);\n"
+                  "                    axon_tensor_free(S); axon_tensor_free(W_reg);\n"
+                  "                }",
+              ),
+              ("if (rc != AXON_OK) { free(vals); axon_arena_destroy(); return rc; }",
+               "if (rc != AXON_OK) { axon_tensor_free(out); for (int j=0;j<i;++j) axon_tensor_free(vals[j]); free(vals); axon_arena_destroy(); return rc; }"),
+              ("    free(vals);\n    axon_arena_destroy();",
+               "    for (int j = 0; j < m->num_nodes; ++j) axon_tensor_free(vals[j]);\n    free(vals);\n    axon_arena_destroy();"),
+              ("static void send_http(axon_sock_t c, int code, const char *ctype, const char *body, size_t blen) {",
+               "static void json_esc(const char *s, char *out, size_t cap) {\n"
+               "    size_t j = 0;\n"
+               "    for (size_t i = 0; s && s[i] && j + 3 < cap; ++i) {\n"
+               "        unsigned char ch = (unsigned char)s[i];\n"
+               "        if (ch == '\"' || ch == '\\\\') { out[j++] = '\\\\'; out[j++] = (char)ch; }\n"
+               "        else if (ch >= 0x20) { out[j++] = (char)ch; }\n"
+               "    }\n"
+               "    out[j] = '\\0';\n"
+               "}\n"
+               "static void send_http(axon_sock_t c, int code, const char *ctype, const char *body, size_t blen) {"),
+              ("if (strncmp(p, \"Content-Length:\", 15) == 0 || strncmp(p, \"content-length:\", 15) == 0) {\n"
+               "                            content_len = (size_t)strtoull(p + 15, NULL, 10);\n"
+               "                        }",
+               "const char *cl = \"content-length:\"; int ok_cl = 1;\n"
+               "                        for (int ci = 0; ci < 15; ++ci) if (tolower((unsigned char)p[ci]) != cl[ci]) { ok_cl = 0; break; }\n"
+               "                        if (ok_cl) {\n"
+               "                            content_len = (size_t)strtoull(p + 15, NULL, 10);\n"
+               "                        }"),
+              ("        char json[1024];\n"
+               "        snprintf(json, sizeof(json),\n"
+               "            \"{\\\"edition\\\":\\\"%s\\\",\\\"pro\\\":%d,\\\"is_server\\\":%d,\\\"quota_used_s\\\":%.2f,\\\"quota_locked\\\":%d,\"\n"
+               "            \"\\\"model\\\":\\\"%s\\\",\\\"format\\\":\\\"%s\\\",\\\"mode\\\":\\\"%s\\\",\\\"raw_bytes\\\":%zu,\\\"active_bytes\\\":%zu,\"\n"
+               "            \"\\\"ram_saved\\\":%.2f,\\\"flops_skipped\\\":%.2f,\\\"last_ms\\\":%.4f,\\\"opencl_device\\\":\\\"%s\\\"}\",\n"
+               "            AXON_EDITION_PRO ? \"Axon Pro v12\" : \"Axon Free v12\", AXON_EDITION_PRO, detect_server_env(),\n"
+               "            qused, qlocked, g_model.model_name, g_model.format, g_model.backend_mode,\n"
+               "            g_model.raw_f32_bytes, g_model.active_weight_bytes, g_model.last_ram_saved,\n"
+               "            g_model.last_flops_skipped, g_model.last_ms, g_ocl.available ? g_ocl.device_name : \"none\");",
+               "        char json[1536], emod[256], emode[64], edev[256];\n"
+               "        json_esc(g_model.model_name, emod, sizeof(emod));\n"
+               "        json_esc(g_model.backend_mode, emode, sizeof(emode));\n"
+               "        json_esc(g_ocl.available ? g_ocl.device_name : \"none\", edev, sizeof(edev));\n"
+               "        snprintf(json, sizeof(json),\n"
+               "            \"{\\\"edition\\\":\\\"%s\\\",\\\"pro\\\":%d,\\\"is_server\\\":%d,\\\"quota_used_s\\\":%.2f,\\\"quota_locked\\\":%d,\"\n"
+               "            \"\\\"model\\\":\\\"%s\\\",\\\"format\\\":\\\"%s\\\",\\\"mode\\\":\\\"%s\\\",\\\"raw_bytes\\\":%zu,\\\"active_bytes\\\":%zu,\"\n"
+               "            \"\\\"ram_saved\\\":%.2f,\\\"flops_skipped\\\":%.2f,\\\"last_ms\\\":%.4f,\\\"opencl_device\\\":\\\"%s\\\"}\",\n"
+               "            AXON_EDITION_PRO ? \"Axon Pro v12\" : \"Axon Free v12\", AXON_EDITION_PRO, detect_server_env(),\n"
+               "            qused, qlocked, emod, g_model.format, emode,\n"
+               "            g_model.raw_f32_bytes, g_model.active_weight_bytes, g_model.last_ram_saved,\n"
+               "            g_model.last_flops_skipped, g_model.last_ms, edev);"),
+              ("        if (ms_cl >= 0) {\n"
+               "            snprintf(json, sizeof(json),\n"
+               "                \"{\\\"results\\\":[{\\\"mode\\\":\\\"CPU F32 (SIMD+OMP)\\\",\\\"ms\\\":%.3f,\\\"err\\\":0.0},\"\n"
+               "                \"{\\\"mode\\\":\\\"OpenCL (%s)\\\",\\\"ms\\\":%.3f,\\\"err\\\":%.2e}]}\",\n"
+               "                ms_f32, g_ocl.device_name, ms_cl, err_cl);",
+               "        if (ms_cl >= 0) {\n"
+               "            char edev[256]; json_esc(g_ocl.device_name, edev, sizeof(edev));\n"
+               "            snprintf(json, sizeof(json),\n"
+               "                \"{\\\"results\\\":[{\\\"mode\\\":\\\"CPU F32 (SIMD+OMP)\\\",\\\"ms\\\":%.3f,\\\"err\\\":0.0},\"\n"
+               "                \"{\\\"mode\\\":\\\"OpenCL (%s)\\\",\\\"ms\\\":%.3f,\\\"err\\\":%.2e}]}\",\n"
+               "                ms_f32, edev, ms_cl, err_cl);"),
+              ('"-fno-math-errno",', '"-fno-math-errno", "-ffp-contract=off",'),
           ):
               s = s.replace(a, b)
           open(p, "w", encoding="utf-8").write(s)
@@ -248,6 +556,18 @@ jobs:
           rp = "axon/runtime_paths.py"
           rs = open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]')
           open(rp, "w", encoding="utf-8").write(rs)
+
+          tp = "axon/tools.py"
+          ts = open(tp, encoding="utf-8").read()
+          ts = ts.replace(
+              'exe=os.path.join(tmp,"k")',
+              'exe=os.path.join(tmp,"k.exe" if os.name=="nt" else "k")',
+          )
+          ts = ts.replace(
+              '[os.environ.get("CC") or shutil.which("cc") or "cc",*Evolver._flags()',
+              '[os.environ.get("CC") or shutil.which("cc") or shutil.which("gcc") or shutil.which("clang") or "cc",*Evolver._flags()',
+          )
+          open(tp, "w", encoding="utf-8").write(ts)
 
           bi = "axon/backend/__init__.py"
           bs = open(bi, encoding="utf-8").read()
@@ -320,10 +640,14 @@ jobs:
           python -m axon.cli export-axg examples/mini_llm.axon -o dist_v12/mini_llm --brain
           if [ "${{ runner.os }}" = "Windows" ]; then
             ./dist_v12/axon-studio.exe --once
+            ./dist_v12/axon-studio.exe --axg dist_v12/mini_llm.axg1 --axn dist_v12/mini_llm.axn3 --once
             ./dist_v12/axon-pro-studio.exe --once
+            ./dist_v12/axon-pro-studio.exe --axg dist_v12/mini_llm.axg1 --axn dist_v12/mini_llm.axn3 --once
           else
             ./dist_v12/axon-studio --once
+            ./dist_v12/axon-studio --axg dist_v12/mini_llm.axg1 --axn dist_v12/mini_llm.axn3 --once
             ./dist_v12/axon-pro-studio --once
+            ./dist_v12/axon-pro-studio --axg dist_v12/mini_llm.axg1 --axn dist_v12/mini_llm.axn3 --once
             python -m axon.cli build-mobile -o dist_mobile_ios
             ls -lh dist_mobile_ios/
           fi
