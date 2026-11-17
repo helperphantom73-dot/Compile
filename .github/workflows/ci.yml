@@ -38,6 +38,27 @@ jobs:
               ("#endif\n'''\n\nKOTLIN_KT = r'''", '#endif\n"""\n\nKOTLIN_KT = r"""'),
               ("}\n'''\n\nSWIFT_WRAP = r'''", '}\n"""\n\nSWIFT_WRAP = r"""'),
               ("    }\n}\n'''\n\n\ndef _find_android_cc():", '    }\n}\n"""\n\n\ndef _find_android_cc():'),
+              (
+                  "            for host in os.listdir(pre):\n"
+                  "                cc = os.path.join(pre, host, \"bin\", \"aarch64-linux-android24-clang\")\n"
+                  "                if os.path.isfile(cc):\n"
+                  "                    return cc",
+                  "            for host in os.listdir(pre):\n"
+                  "                for suf in ((\".cmd\", \".exe\") if os.name == \"nt\" else (\"\",)):\n"
+                  "                    cc = os.path.join(pre, host, \"bin\", \"aarch64-linux-android24-clang\" + suf)\n"
+                  "                    if os.path.isfile(cc):\n"
+                  "                        return cc",
+              ),
+              (
+                  "        r = subprocess.run(\n"
+                  "            [ndk_cc, \"-O3\", \"-fPIC\", \"-shared\", \"-std=c11\", \"-D__ANDROID__\", f\"-I{rt}\", str(rt / \"axon_runtime.c\"), str(jni_c), \"-lm\", \"-o\", str(so)],\n"
+                  "            capture_output=True, text=True,\n"
+                  "        )",
+                  "        cmd = ([\"cmd\", \"/c\", ndk_cc] if (os.name == \"nt\" and ndk_cc.lower().endswith((\".cmd\", \".bat\"))) else [ndk_cc]) + [\n"
+                  "            \"-O3\", \"-fPIC\", \"-shared\", \"-std=c11\", \"-D__ANDROID__\", f\"-I{rt}\", str(rt / \"axon_runtime.c\"), str(jni_c), \"-lm\", \"-o\", str(so)\n"
+                  "        ]\n"
+                  "        r = subprocess.run(cmd, capture_output=True, text=True)",
+              ),
               ("SN(11,15,2,4,8,3,5,8,10);", "SN(11,15,2,4,8,3,5,8,10,NULL);"),
               ('\'    sp.add_parser("doctor")\'', '\'    pi=sp.add_parser("inspect")\''),
               ("#  include <windows.h>\n#  include <direct.h>", "#  include <windows.h>\n#  include <direct.h>\n#  include <malloc.h>"),
@@ -383,6 +404,27 @@ jobs:
               ("#endif\n'''\n\nKOTLIN_KT = r'''", '#endif\n"""\n\nKOTLIN_KT = r"""'),
               ("}\n'''\n\nSWIFT_WRAP = r'''", '}\n"""\n\nSWIFT_WRAP = r"""'),
               ("    }\n}\n'''\n\n\ndef _find_android_cc():", '    }\n}\n"""\n\n\ndef _find_android_cc():'),
+              (
+                  "            for host in os.listdir(pre):\n"
+                  "                cc = os.path.join(pre, host, \"bin\", \"aarch64-linux-android24-clang\")\n"
+                  "                if os.path.isfile(cc):\n"
+                  "                    return cc",
+                  "            for host in os.listdir(pre):\n"
+                  "                for suf in ((\".cmd\", \".exe\") if os.name == \"nt\" else (\"\",)):\n"
+                  "                    cc = os.path.join(pre, host, \"bin\", \"aarch64-linux-android24-clang\" + suf)\n"
+                  "                    if os.path.isfile(cc):\n"
+                  "                        return cc",
+              ),
+              (
+                  "        r = subprocess.run(\n"
+                  "            [ndk_cc, \"-O3\", \"-fPIC\", \"-shared\", \"-std=c11\", \"-D__ANDROID__\", f\"-I{rt}\", str(rt / \"axon_runtime.c\"), str(jni_c), \"-lm\", \"-o\", str(so)],\n"
+                  "            capture_output=True, text=True,\n"
+                  "        )",
+                  "        cmd = ([\"cmd\", \"/c\", ndk_cc] if (os.name == \"nt\" and ndk_cc.lower().endswith((\".cmd\", \".bat\"))) else [ndk_cc]) + [\n"
+                  "            \"-O3\", \"-fPIC\", \"-shared\", \"-std=c11\", \"-D__ANDROID__\", f\"-I{rt}\", str(rt / \"axon_runtime.c\"), str(jni_c), \"-lm\", \"-o\", str(so)\n"
+                  "        ]\n"
+                  "        r = subprocess.run(cmd, capture_output=True, text=True)",
+              ),
               ("SN(11,15,2,4,8,3,5,8,10);", "SN(11,15,2,4,8,3,5,8,10,NULL);"),
               ('\'    sp.add_parser("doctor")\'', '\'    pi=sp.add_parser("inspect")\''),
               ("#  include <windows.h>\n#  include <direct.h>", "#  include <windows.h>\n#  include <direct.h>\n#  include <malloc.h>"),
