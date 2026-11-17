@@ -343,8 +343,10 @@ jobs:
 
       - name: Ensure C Compiler & llvmlite
         shell: bash
+        env:
+          TARGET_OS: ${{ runner.os }}
         run: |
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$TARGET_OS" = "Windows" ]; then
             export PATH="/c/msys64/mingw64/bin:/c/ProgramData/mingw64/mingw64/bin:/c/Strawberry/c/bin:$PATH"
             if ! command -v gcc >/dev/null 2>&1; then
               choco install mingw -y
@@ -358,6 +360,8 @@ jobs:
 
       - name: Patch, Build & Verify Axon v12.0 on ${{ matrix.os }}
         shell: bash
+        env:
+          TARGET_OS: ${{ runner.os }}
         run: |
           python - <<'PY'
           import os, subprocess, sys, tempfile
@@ -653,7 +657,7 @@ jobs:
           PY
           python axon_v12_studio.py
           python -m axon.cli export-axg examples/mini_llm.axon -o dist_v12/mini_llm --brain
-          if [ "${{ runner.os }}" = "Windows" ]; then
+          if [ "$TARGET_OS" = "Windows" ]; then
             ./dist_v12/axon-studio.exe --once
             ./dist_v12/axon-studio.exe --axg dist_v12/mini_llm.axg1 --axn dist_v12/mini_llm.axn3 --once
             ./dist_v12/axon-pro-studio.exe --once
