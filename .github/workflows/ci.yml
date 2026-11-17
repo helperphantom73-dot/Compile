@@ -235,6 +235,16 @@ jobs:
 
           rp = "axon/runtime_paths.py"
           rs = open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]')
+          rs = rs.replace(
+              '    sh_cmd = [cc, *cflags, "-shared", str(rt.core_obj)]',
+              '    if os.name == "nt" and rt.shared_lib.exists():\n'
+              '        old_dll = rt.shared_lib.with_suffix(".dll.old")\n'
+              '        try:\n'
+              '            if old_dll.exists(): old_dll.unlink()\n'
+              '            rt.shared_lib.replace(old_dll)\n'
+              '        except OSError: pass\n'
+              '    sh_cmd = [cc, *cflags, "-shared", str(rt.core_obj)]',
+          )
           open(rp, "w", encoding="utf-8").write(rs)
 
           tp = "axon/tools.py"
@@ -268,6 +278,7 @@ jobs:
           if os.path.exists("axon/runtime/.axon_tuning_stamp"):
               os.remove("axon/runtime/.axon_tuning_stamp")
           PY
+          python3 -m axon.cli autoconfig --dim 64
           python3 axon_v12_studio.py
           python3 -m axon.cli export-axg examples/mini_llm.axon -o dist_v12/mini_llm --brain
           python3 -m axon.cli build-mobile -o dist_mobile_android
@@ -569,6 +580,16 @@ jobs:
 
           rp = "axon/runtime_paths.py"
           rs = open(rp, encoding="utf-8").read().replace('"-fno-math-errno"]', '"-fno-math-errno", "-ffp-contract=off"]')
+          rs = rs.replace(
+              '    sh_cmd = [cc, *cflags, "-shared", str(rt.core_obj)]',
+              '    if os.name == "nt" and rt.shared_lib.exists():\n'
+              '        old_dll = rt.shared_lib.with_suffix(".dll.old")\n'
+              '        try:\n'
+              '            if old_dll.exists(): old_dll.unlink()\n'
+              '            rt.shared_lib.replace(old_dll)\n'
+              '        except OSError: pass\n'
+              '    sh_cmd = [cc, *cflags, "-shared", str(rt.core_obj)]',
+          )
           open(rp, "w", encoding="utf-8").write(rs)
 
           tp = "axon/tools.py"
@@ -655,6 +676,7 @@ jobs:
           if os.path.exists("axon/runtime/.axon_tuning_stamp"):
               os.remove("axon/runtime/.axon_tuning_stamp")
           PY
+          python -m axon.cli autoconfig --dim 64
           python axon_v12_studio.py
           python -m axon.cli export-axg examples/mini_llm.axon -o dist_v12/mini_llm --brain
           if [ "$TARGET_OS" = "Windows" ]; then
